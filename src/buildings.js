@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { BAY_W, L, makeFacadeTexture, makeBuildingMaterial } from './facades.js';
 import { pointInRing } from './spatial.js';
+import { T } from './terrain.js';
 
 const TILE = 500;
 const ROOF_V = 3.0; // roof texture repeat (m) up the slope
@@ -31,7 +32,7 @@ const srgb = (rgb, k = 1) => { const c = new THREE.Color().setRGB(Math.min(1, (r
 const shade = (c, k) => [c[0] * k, c[1] * k, c[2] * k];
 
 class FGeo {
-  constructor() { this.pos = []; this.nrm = []; this.col = []; this.fac = []; }
+  constructor() { this.pos = []; this.nrm = []; this.col = []; this.fac = []; this.yOff = 0; }
   // Triangle with flat normal, wound to face along hint (hx,hy,hz). p = [x,y,z], uv = [u,v].
   tri(a, b, c, ua, ub, uc, layer, ca, cb, cc, hx, hy, hz) {
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
@@ -45,7 +46,7 @@ class FGeo {
       nx = -nx; ny = -ny; nz = -nz;
     }
     for (const [p, uv, col] of [[a, ua, ca], [b, ub, cb], [c, uc, cc]]) {
-      this.pos.push(p[0], p[1], p[2]);
+      this.pos.push(p[0], p[1] + this.yOff, p[2]); // yOff = this building's ground level
       this.nrm.push(nx, ny, nz);
       this.col.push(col[0], col[1], col[2]);
       this.fac.push(uv[0], uv[1], layer);
@@ -247,6 +248,11 @@ export function buildBuildings(map, bindex, roadIndex, group, commercialSet = ne
     for (let i = 0; i < n; i++) { cx += p[i * 2]; cz += p[i * 2 + 1]; }
     cx /= n; cz /= n;
     const g = geoAt(cx, cz);
+    // sit on the lowest ground under the footprint; on slopes the uphill side is buried in the hill
+    let base = Infinity;
+    for (let i = 0; i < n; i++) base = Math.min(base, T(p[i * 2], p[i * 2 + 1]));
+    base = Math.min(base, T(cx, cz)) - 0.15;
+    g.yOff = base;
     const r1 = hash01(bi), r2 = hash01(bi + 777777), r3 = hash01(bi + 31337);
     const area = Math.abs(ringArea(p));
     const st = styleOf(b, r1, area, commercialSet.has(bi));
@@ -326,7 +332,7 @@ export function buildBuildings(map, bindex, roadIndex, group, commercialSet = ne
       } else {
         g.wall(ax, az, bx, bz, 0, wallTop, 0, nb, 0, wallTop / fh, upperLayer, col, nx, nz, true);
       }
-      if (isFront) fronts.push({ bi, ax, az, bx, bz, nx, nz, len, groundH, h, kind: st.kind });
+      if (isFront) fronts.push({ bi, ax, az, bx, bz, nx, nz, len, groundH, h, kind: st.kind, base });
     }
 
     // roof

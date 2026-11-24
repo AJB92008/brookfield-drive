@@ -2,6 +2,7 @@
 // streetlights, street-name blades, sidewalks. Positions come pre-computed in map.furniture.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { T } from './terrain.js';
 
 const Y_SIDEWALK = 0.055, Y_XWALK = 0.1;
 export const SIGNAL_CYCLE = 34; // s: phase 0 green 0-13, yellow 13-16, all-red 16-17, phase 1 green 17-30, yellow 30-33, all-red 33-34
@@ -96,18 +97,19 @@ export function buildFurniture(map, group) {
   const lamps = []; // { signal, phase, kind, x, y, z, rotY }
   f.signals.forEach((s, si) => {
     for (const [px, pz, fx, fz, ax, az, len, heads, phase] of s.p) {
-      staticParts.push(place(poleGeo, px, 0, pz));
+      const gy = T(px, pz); // pole base on the real ground
+      staticParts.push(place(poleGeo, px, gy, pz));
       const armRot = Math.atan2(ax, az);
       const arm = armGeo.clone().scale(1, 1, len);
-      staticParts.push(place(arm, px, 6.6, pz, armRot));
+      staticParts.push(place(arm, px, gy + 6.6, pz, armRot));
       const faceRot = Math.atan2(fx, fz);
       for (let k = 0; k < heads; k++) {
         const t = Math.max(1.2, len - 0.9 - k * 3.4);
         const hx = px + ax * t, hz = pz + az * t;
-        staticParts.push(place(headGeo, hx, 5.95, hz, faceRot));
-        plateParts.push(place(plateGeo, hx - fx * 0.17, 5.95, hz - fz * 0.17, faceRot));
+        staticParts.push(place(headGeo, hx, gy + 5.95, hz, faceRot));
+        plateParts.push(place(plateGeo, hx - fx * 0.17, gy + 5.95, hz - fz * 0.17, faceRot));
         for (let kind = 0; kind < 3; kind++) {
-          lamps.push({ si, phase, kind, x: hx + fx * 0.16, y: 6.3 - kind * 0.36, z: hz + fz * 0.16, rotY: faceRot });
+          lamps.push({ si, phase, kind, x: hx + fx * 0.16, y: gy + 6.3 - kind * 0.36, z: hz + fz * 0.16, rotY: faceRot });
         }
       }
     }
@@ -153,7 +155,7 @@ export function buildFurniture(map, group) {
     for (let i = 0; i < nStops; i++) {
       const [x, z, fx, fz] = f.stops.slice(i * 4, i * 4 + 4);
       q.setFromEuler(e.set(0, Math.atan2(fx, fz), 0));
-      m4.compose(pv.set(x, 0, z), q, sc);
+      m4.compose(pv.set(x, T(x, z), z), q, sc);
       post.setMatrixAt(i, m4); face.setMatrixAt(i, m4); back.setMatrixAt(i, m4);
     }
     add(post); add(face); add(back);
@@ -171,7 +173,7 @@ export function buildFurniture(map, group) {
     for (let i = 0; i < nLights; i++) {
       const [x, z, dx, dz] = f.lights.slice(i * 4, i * 4 + 4);
       q.setFromEuler(e.set(0, Math.atan2(dx, dz), 0));
-      m4.compose(pv.set(x, 0, z), q, sc);
+      m4.compose(pv.set(x, T(x, z), z), q, sc);
       lightsMesh.setMatrixAt(i, m4);
     }
     lightsMesh.computeBoundingSphere();
@@ -186,10 +188,11 @@ export function buildFurniture(map, group) {
     const signGreen = new THREE.MeshLambertMaterial({ color: 0x1d6b3c });
     for (let i = 0; i < nSigns; i++) {
       const [x, z, n1, a1, n2, a2] = f.streetSigns.slice(i * 6, i * 6 + 6);
-      posts.push(place(new THREE.CylinderGeometry(0.03, 0.03, 2.9, 5).translate(0, 1.45, 0), x, 0, z));
+      const gy = T(x, z);
+      posts.push(place(new THREE.CylinderGeometry(0.03, 0.03, 2.9, 5).translate(0, 1.45, 0), x, gy, z));
       [[n1, a1, 2.82], [n2, a2, 2.6]].forEach(([n, ang, y]) => {
         const len = 0.35 + atlas.widths[n] * 1.0;
-        blades.push(place(new THREE.BoxGeometry(0.025, 0.17, len), x, y, z, ang));
+        blades.push(place(new THREE.BoxGeometry(0.025, 0.17, len), x, gy + y, z, ang));
         // text quads on both faces; u range covers the used width of the cell, centered
         const col = n % atlas.COLS, row = Math.floor(n / atlas.COLS);
         const uw = atlas.widths[n] * atlas.CW;
@@ -199,7 +202,7 @@ export function buildFurniture(map, group) {
         const hl = len / 2 - 0.05, hh = 0.075;
         for (const side of [1, -1]) {
           const ox = c * 0.014 * side, oz = -s * 0.014 * side; // blade normal = (cos, -sin) rotated frame x axis
-          const P = (along, up) => [x + s * along + ox, y + up, z + c * along + oz];
+          const P = (along, up) => [x + s * along + ox, gy + y + up, z + c * along + oz];
           // reading direction: on the +side the text runs toward -along so it isn't mirrored
           const a0 = side > 0 ? hl : -hl, a1_ = side > 0 ? -hl : hl;
           const quad = [P(a0, -hh), P(a1_, -hh), P(a1_, hh), P(a0, -hh), P(a1_, hh), P(a0, hh)];
@@ -221,8 +224,9 @@ export function buildFurniture(map, group) {
   // ---------- crosswalks + sidewalks (flat) ----------
   const flatPos = [], flatCol = [];
   const white = new THREE.Color(0xf0f0ea), concrete = new THREE.Color(0xc7c3ba);
+  // y = height above the real ground at each corner
   const quad = (pts, y, col) => {
-    for (const k of [0, 1, 2, 0, 2, 3]) { flatPos.push(pts[k][0], y, pts[k][1]); flatCol.push(col.r, col.g, col.b); }
+    for (const k of [0, 1, 2, 0, 2, 3]) { flatPos.push(pts[k][0], y + 0.12 + T(pts[k][0], pts[k][1]), pts[k][1]); flatCol.push(col.r, col.g, col.b); }
   };
   for (let i = 0; i < f.crosswalks.length; i += 5) {
     const [x, z, dx, dz, w] = f.crosswalks.slice(i, i + 5);
@@ -236,7 +240,16 @@ export function buildFurniture(map, group) {
       quad([c0, c1, c2, c3], Y_XWALK, white);
     }
   }
-  for (const p of f.sidewalks) {
+  for (const raw of f.sidewalks) {
+    const p = [];
+    for (let k = 0; k < raw.length; k += 2) {
+      if (k > 0) {
+        const ax = raw[k - 2], az = raw[k - 1], bx = raw[k], bz = raw[k + 1];
+        const steps = Math.floor(Math.hypot(bx - ax, bz - az) / 8);
+        for (let j = 1; j <= steps; j++) { const t = j / (steps + 1); p.push(ax + (bx - ax) * t, az + (bz - az) * t); }
+      }
+      p.push(raw[k], raw[k + 1]);
+    }
     for (let k = 0; k + 3 < p.length; k += 2) {
       const ax = p[k], az = p[k + 1], bx = p[k + 2], bz = p[k + 3];
       const L = Math.hypot(bx - ax, bz - az);

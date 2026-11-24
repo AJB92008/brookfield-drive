@@ -4,9 +4,13 @@ import { makeDetailTexture, makeAsphaltTexture } from './textures.js';
 import { Grid, pointInRing, PointIndex } from './spatial.js';
 import { buildBuildings as buildDetailedBuildings } from './buildings.js';
 import { buildFurniture } from './furniture.js';
+import { T } from './terrain.js';
 import { buildSigns, assignPois } from './signs.js';
 
 const TILE = 500; // meters; static geometry is merged per tile so frustum culling works
+// Ground overlays (roads, paint, sidewalks) sit this much above the terrain so the photo mesh, which
+// interpolates the same elevation slightly differently between grid points, never pokes through.
+export const GROUND_LIFT = 0.12;
 
 export const LAYER_Y = {
   farm: 0.01, reserve: 0.015, park: 0.02, golf: 0.02, forest: 0.025, wetland: 0.025,
@@ -61,12 +65,17 @@ class Geo {
     this.nrm.push(nx, ny, nz);
     if (c) this.col.push(c[0], c[1], c[2]);
   }
-  // Horizontal triangle, wound so it faces up.
+  // Ground-hugging triangle: y is an offset above the real terrain at each vertex. Wound to face up.
   flat(x1, z1, x2, z2, x3, z3, y, c) {
+    const l = y + GROUND_LIFT;
+    this.flatH(x1, z1, l + T(x1, z1), x2, z2, l + T(x2, z2), x3, z3, l + T(x3, z3), c);
+  }
+  // Same with explicit absolute heights (bridge decks).
+  flatH(x1, z1, h1, x2, z2, h2, x3, z3, h3, c) {
     if ((z2 - z1) * (x3 - x1) - (x2 - x1) * (z3 - z1) < 0) {
-      let t = x2; x2 = x3; x3 = t; t = z2; z2 = z3; z3 = t;
+      let t = x2; x2 = x3; x3 = t; t = z2; z2 = z3; z3 = t; t = h2; h2 = h3; h3 = t;
     }
-    this.v(x1, y, z1, 0, 1, 0, c); this.v(x2, y, z2, 0, 1, 0, c); this.v(x3, y, z3, 0, 1, 0, c);
+    this.v(x1, h1, z1, 0, 1, 0, c); this.v(x2, h2, z2, 0, 1, 0, c); this.v(x3, h3, z3, 0, 1, 0, c);
   }
   // Arbitrary triangle with flat normal, wound so the normal has a positive dot with (hx,hy,hz).
   tri(a, b, c, col, hx, hy, hz, colB, colC) {
@@ -84,10 +93,12 @@ class Geo {
     this.v(b[0], b[1], b[2], nx, ny, nz, colB);
     this.v(c[0], c[1], c[2], nx, ny, nz, colC);
   }
-  disc(cx, cz, r, y, c, segs = 14) {
+  disc(cx, cz, r, y, c, segs = 14, deckH = null) {
     for (let k = 0; k < segs; k++) {
       const a0 = (k / segs) * Math.PI * 2, a1 = ((k + 1) / segs) * Math.PI * 2;
-      this.flat(cx, cz, cx + Math.cos(a0) * r, cz + Math.sin(a0) * r, cx + Math.cos(a1) * r, cz + Math.sin(a1) * r, y, c);
+      const x1 = cx + Math.cos(a0) * r, z1 = cz + Math.sin(a0) * r, x2 = cx + Math.cos(a1) * r, z2 = cz + Math.sin(a1) * r;
+      if (deckH === null) this.flat(cx, cz, x1, z1, x2, z2, y, c);
+      else this.flatH(cx, cz, deckH + y, x1, z1, deckH + y, x2, z2, deckH + y, c);
     }
   }
   toGeometry(uvScale = 0) {
@@ -134,7 +145,23 @@ class Tiles {
 
 // ---------- polyline helpers ----------
 // Precomputes per-vertex miter vectors and arc lengths for a road's centerline.
-function polyline(pts) {
+const MAX_SEG = 8; // m: long segments are split so road surfaces follow hills
+function polyline(rawPts, rawDeck = null) {
+  const pts = [], deckArr = rawDeck ? [] : null;
+  for (let i = 0; i < rawPts.length / 2; i++) {
+    if (i > 0) {
+      const ax = rawPts[i * 2 - 2], az = rawPts[i * 2 - 1], bx = rawPts[i * 2], bz = rawPts[i * 2 + 1];
+      const steps = Math.floor(Math.hypot(bx - ax, bz - az) / MAX_SEG);
+      for (let k = 1; k <= steps; k++) {
+        const t = k / (steps + 1);
+        pts.push(ax + (bx - ax) * t, az + (bz - az) * t);
+        if (deckArr) deckArr.push(rawDeck[i - 1] + (rawDeck[i] - rawDeck[i - 1]) * t);
+      }
+    }
+    pts.push(rawPts[i * 2], rawPts[i * 2 + 1]);
+    if (deckArr) deckArr.push(rawDeck[i]);
+  }
+  const deck = deckArr ? Float32Array.from(deckArr) : null;
   const n = pts.length / 2;
   const sx = new Float32Array(n - 1), sz = new Float32Array(n - 1);
   const S = new Float32Array(n);
@@ -163,8 +190,10 @@ function polyline(pts) {
     if (dot < 0.8) sharp.push(i);
     mx[i] = x * s; mz[i] = z * s;
   }
-  return { pts, n, sx, sz, S, mx, mz, sharp, len: S[n - 1] };
+  return { pts, n, sx, sz, S, mx, mz, sharp, len: S[n - 1], deck };
 }
+// deck height at segment i, fraction t (bridges only)
+const deckAt = (pl, i, t) => pl.deck[i] + (pl.deck[Math.min(i + 1, pl.n - 1)] - pl.deck[i]) * t;
 
 function pointAt(pl, s, off) {
   const { pts, S, n } = pl;
@@ -180,20 +209,38 @@ function pointAt(pl, s, off) {
   const t = Math.min(1, Math.max(0, (s - S[i]) / segL));
   const ax = pts[i * 2] + pl.mx[i] * off, az = pts[i * 2 + 1] + pl.mz[i] * off;
   const bx = pts[i * 2 + 2] + pl.mx[i + 1] * off, bz = pts[i * 2 + 3] + pl.mz[i + 1] * off;
-  return [ax + (bx - ax) * t, az + (bz - az) * t, i];
+  return [ax + (bx - ax) * t, az + (bz - az) * t, i, t];
 }
 
-function ribbon(tiles, pl, hw, y, c) {
-  const { pts, n, mx, mz } = pl;
+const PARAPET = [0.62, 0.62, 0.6];
+function ribbon(tiles, pl, hw, y, c, walls = null) {
+  const { pts, n, mx, mz, deck } = pl;
   for (let i = 0; i < n - 1; i++) {
     const ax = pts[i * 2], az = pts[i * 2 + 1], bx = pts[i * 2 + 2], bz = pts[i * 2 + 3];
     const g = tiles.at((ax + bx) / 2, (az + bz) / 2);
     const rax = ax + mx[i] * hw, raz = az + mz[i] * hw, lax = ax - mx[i] * hw, laz = az - mz[i] * hw;
     const rbx = bx + mx[i + 1] * hw, rbz = bz + mz[i + 1] * hw, lbx = bx - mx[i + 1] * hw, lbz = bz - mz[i + 1] * hw;
-    g.flat(rax, raz, lax, laz, lbx, lbz, y, c);
-    g.flat(rax, raz, lbx, lbz, rbx, rbz, y, c);
+    if (!deck) {
+      g.flat(rax, raz, lax, laz, lbx, lbz, y, c);
+      g.flat(rax, raz, lbx, lbz, rbx, rbz, y, c);
+    } else {
+      const ha = deck[i] + y, hb = deck[i + 1] + y;
+      g.flatH(rax, raz, ha, lax, laz, ha, lbx, lbz, hb, c);
+      g.flatH(rax, raz, ha, lbx, lbz, hb, rbx, rbz, hb, c);
+      if (walls) {
+        // concrete parapets on both edges (0.85 m above the deck) and a fascia below it
+        const w = walls.at((ax + bx) / 2, (az + bz) / 2);
+        for (const [x0, z0, x1, z1, sgn] of [[rax, raz, rbx, rbz, 1], [lax, laz, lbx, lbz, -1]]) {
+          const nx = mx[i] * sgn, nz = mz[i] * sgn;
+          w.tri([x0, ha - 1.1, z0], [x1, hb - 1.1, z1], [x1, hb + 0.85, z1], PARAPET, nx, 0, nz);
+          w.tri([x0, ha - 1.1, z0], [x1, hb + 0.85, z1], [x0, ha + 0.85, z0], PARAPET, nx, 0, nz);
+          w.tri([x0, ha - 1.1, z0], [x1, hb - 1.1, z1], [x1, hb + 0.85, z1], PARAPET, -nx, 0, -nz);
+          w.tri([x0, ha - 1.1, z0], [x1, hb + 0.85, z1], [x0, ha + 0.85, z0], PARAPET, -nx, 0, -nz);
+        }
+      }
+    }
   }
-  for (const i of pl.sharp) tiles.at(pts[i * 2], pts[i * 2 + 1]).disc(pts[i * 2], pts[i * 2 + 1], hw, y, c);
+  for (const i of pl.sharp) tiles.at(pts[i * 2], pts[i * 2 + 1]).disc(pts[i * 2], pts[i * 2 + 1], hw, y, c, 14, deck ? deck[i] : null);
 }
 
 // Subtract sorted-or-not exclusion intervals from [a,b] pieces.
@@ -225,13 +272,19 @@ function paintLine(tiles, pl, off, width, color, y, { dash = 0, gap = 0, excl = 
     if (b - a < 0.3) continue;
     let s = a;
     while (s < b - 0.01) {
-      const [x0, z0, i] = pointAt(pl, s + 0.001, off);
+      const [x0, z0, i, t0] = pointAt(pl, s + 0.001, off);
       const segEnd = Math.min(b, pl.S[i + 1]);
-      const [x1, z1] = pointAt(pl, segEnd - 0.001, off);
+      const [x1, z1, , t1] = pointAt(pl, segEnd - 0.001, off);
       const nx = -pl.sz[i] * hw, nz = pl.sx[i] * hw;
       const g = tiles.at(x0, z0);
-      g.flat(x0 + nx, z0 + nz, x0 - nx, z0 - nz, x1 - nx, z1 - nz, y, color);
-      g.flat(x0 + nx, z0 + nz, x1 - nx, z1 - nz, x1 + nx, z1 + nz, y, color);
+      if (!pl.deck) {
+        g.flat(x0 + nx, z0 + nz, x0 - nx, z0 - nz, x1 - nx, z1 - nz, y, color);
+        g.flat(x0 + nx, z0 + nz, x1 - nx, z1 - nz, x1 + nx, z1 + nz, y, color);
+      } else {
+        const h0 = deckAt(pl, i, t0) + y, h1 = deckAt(pl, i, t1) + y;
+        g.flatH(x0 + nx, z0 + nz, h0, x0 - nx, z0 - nz, h0, x1 - nx, z1 - nz, h1, color);
+        g.flatH(x0 + nx, z0 + nz, h0, x1 - nx, z1 - nz, h1, x1 + nx, z1 + nz, h1, color);
+      }
       if (segEnd <= s) break;
       s = segEnd;
     }
@@ -290,14 +343,18 @@ function buildRoads(map, group, mats) {
     a.push({ ri, end: k === 0 || k === r.nd.length - 1 });
   }));
 
-  const polys = roads.map((r) => polyline(P(r)));
+  const polys = roads.map((r) => polyline(P(r), r.dh || null));
+  // deck height at nodes that sit on a bridge (so junction discs there aren't drawn at ground level)
+  const nodeDeck = new Map();
+  roads.forEach((r) => { if (r.dh) r.nd.forEach((n, k) => nodeDeck.set(n, r.dh[k])); });
+  const walls = new Tiles();
 
   // Surfaces: service roads first so major roads draw cleanly over them (same color anyway).
   // Parking aisles and driveways go in their own meshes: the aerial photo already shows them,
   // so they can be hidden when it's loaded (they stay in the road index for physics).
   const minor = new Tiles();
   const isMinor = (r) => r.t === 'service' && (r.sv === 'parking_aisle' || r.sv === 'driveway');
-  roads.forEach((r, ri) => ribbon(isMinor(r) ? minor : surface, polys[ri], r.w / 2, LAYER_Y.road, null));
+  roads.forEach((r, ri) => ribbon(isMinor(r) ? minor : surface, polys[ri], r.w / 2, LAYER_Y.road, null, walls));
 
   // Junction / end-cap discs
   for (const [n, list] of inc) {
@@ -307,7 +364,7 @@ function buildRoads(map, group, mats) {
     if (!anyEnd) continue;
     if (list.length === 1 && roads[list[0].ri].t === 'service') continue; // driveway ends
     const allMinor = list.every((e) => isMinor(roads[e.ri]));
-    (allMinor ? minor : surface).at(nodes[n * 2], nodes[n * 2 + 1]).disc(nodes[n * 2], nodes[n * 2 + 1], r, LAYER_Y.road, null, 12);
+    (allMinor ? minor : surface).at(nodes[n * 2], nodes[n * 2 + 1]).disc(nodes[n * 2], nodes[n * 2 + 1], r, LAYER_Y.road, null, 12, nodeDeck.has(n) ? nodeDeck.get(n) : null);
   }
 
   // Markings
@@ -334,7 +391,8 @@ function buildRoads(map, group, mats) {
   });
 
   const tris = surface.addTo(group, mats.road, { uvScale: 7, name: 'roads' }) + paint.addTo(group, mats.paint, { name: 'paint' })
-    + minor.addTo(group, mats.road, { uvScale: 7, name: 'roads-minor' });
+    + minor.addTo(group, mats.road, { uvScale: 7, name: 'roads-minor' })
+    + walls.addTo(group, mats.vertexColored, { cast: true, name: 'bridge-walls' });
   return { tris, polys };
 }
 
@@ -575,7 +633,7 @@ function buildTrees(map, roadIndex, bindex, group, mats, bounds) {
       const [x, z, sc, kind] = t;
       q.setFromAxisAngle(up, hash01(Math.round(x * 7 + z * 13)) * Math.PI * 2);
       s.set(sc, sc * (kind ? 1.15 : 1), sc);
-      pos.set(x, 0, z);
+      pos.set(x, T(x, z) - 0.15, z);
       m.compose(pos, q, s);
       trunks.setMatrixAt(i, m);
       if (kind === 0) {
@@ -623,10 +681,14 @@ export async function buildWorld(map, roadIndex, bindex, scene, progress = async
   const b = map.bounds;
   const margin = 2500;
   const gw = b.maxX - b.minX + margin * 2, gh = b.maxZ - b.minZ + margin * 2;
-  const groundGeo = new THREE.PlaneGeometry(gw, gh, 1, 1).rotateX(-Math.PI / 2).translate((b.minX + b.maxX) / 2, 0, (b.minZ + b.maxZ) / 2);
+  const groundGeo = new THREE.PlaneGeometry(gw, gh, 180, 180).rotateX(-Math.PI / 2).translate((b.minX + b.maxX) / 2, 0, (b.minZ + b.maxZ) / 2);
   const gpos = groundGeo.attributes.position;
   const guv = groundGeo.attributes.uv;
-  for (let i = 0; i < gpos.count; i++) guv.setXY(i, gpos.getX(i) / 11, gpos.getZ(i) / 11);
+  for (let i = 0; i < gpos.count; i++) {
+    guv.setXY(i, gpos.getX(i) / 11, gpos.getZ(i) / 11);
+    gpos.setY(i, T(gpos.getX(i), gpos.getZ(i)) - 0.6); // fallback ground follows the terrain, under the photo
+  }
+  groundGeo.computeVertexNormals();
   const ground = new THREE.Mesh(groundGeo, mats.ground);
   ground.receiveShadow = true;
   ground.name = 'ground';

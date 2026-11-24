@@ -1,4 +1,5 @@
 // Uniform-grid spatial indexes for road segments and building edges.
+import { T } from './terrain.js';
 
 const KEY_OFFSET = 4096;
 const key = (ix, iz) => (ix + KEY_OFFSET) * 8192 + (iz + KEY_OFFSET);
@@ -54,6 +55,9 @@ export class RoadIndex {
     this.bx = new Float32Array(count);
     this.bz = new Float32Array(count);
     this.road = new Int32Array(count);
+    // bridge deck heights at each segment end (NaN = not a bridge: the road follows the terrain)
+    this.ya = new Float32Array(count).fill(NaN);
+    this.yb = new Float32Array(count).fill(NaN);
     this.roads = roads;
     this.grid = new Grid(40);
     let s = 0;
@@ -63,6 +67,7 @@ export class RoadIndex {
         const a = r.nd[i], b = r.nd[i + 1];
         const ax = nodes[a * 2], az = nodes[a * 2 + 1], bx = nodes[b * 2], bz = nodes[b * 2 + 1];
         this.ax[s] = ax; this.az[s] = az; this.bx[s] = bx; this.bz[s] = bz; this.road[s] = ri;
+        if (r.dh) { this.ya[s] = r.dh[i]; this.yb[s] = r.dh[i + 1]; }
         this.grid.insertBox(Math.min(ax, bx) - hw, Math.min(az, bz) - hw, Math.max(ax, bx) + hw, Math.max(az, bz) + hw, s);
       }
     });
@@ -118,10 +123,23 @@ export class RoadIndex {
     return best; // road index or null
   }
 
-  // Height of the drivable surface under (x,z) for something currently at height y.
-  // Flat world for now; this is the single hook for adding bridges/elevation later.
-  surfaceHeight(_x, _z, _y) {
-    return 0;
+  // Height of the drivable surface under (x,z) for something currently at height y: the real terrain,
+  // or a bridge deck if one is there and not too far above y (so you can drive under overpasses).
+  surfaceHeight(x, z, y = Infinity) {
+    // roads are drawn 0.07 m + a 0.12 m overlay lift above the ground (see world.js GROUND_LIFT)
+    let best = T(x, z) + (this.roadAt(x, z) !== null ? 0.19 : 0);
+    const q = ++this._q;
+    this.grid.forBox(x, z, x, z, (s) => {
+      if (this._stamp[s] === q) return;
+      this._stamp[s] = q;
+      if (Number.isNaN(this.ya[s])) return;
+      const t = segT(x, z, this.ax[s], this.az[s], this.bx[s], this.bz[s]);
+      const d = Math.hypot(x - (this.ax[s] + (this.bx[s] - this.ax[s]) * t), z - (this.az[s] + (this.bz[s] - this.az[s]) * t));
+      if (d > this.roads[this.road[s]].w / 2 + 0.6) return;
+      const deck = this.ya[s] + (this.yb[s] - this.ya[s]) * t + 0.07;
+      if (deck <= y + 1.6 && deck > best) best = deck;
+    });
+    return best;
   }
 }
 

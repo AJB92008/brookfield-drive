@@ -6,6 +6,7 @@ import { Traffic } from './traffic.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
 import { AerialGround } from './aerial.js';
+import { loadTerrain, T } from './terrain.js';
 
 const CESIUM_TOKEN = (import.meta.env.VITE_CESIUM_TOKEN || '').trim();
 
@@ -27,6 +28,14 @@ async function main(saved = {}) {
   const res = await fetch(`${import.meta.env.BASE_URL}data/brookfield.json`);
   if (!res.ok) throw new Error(`Map data missing (HTTP ${res.status}). Run: npm run fetch-map && npm run build-map`);
   const map = await res.json();
+
+  // real elevation (USGS 3DEP); everything below is built on top of it
+  try {
+    const t = await loadTerrain(map, import.meta.env.BASE_URL);
+    if (t) console.log(`[brookfield] terrain loaded: ${map.terrain.cols}x${map.terrain.rows} @ ${map.terrain.step} m`);
+  } catch (err) {
+    console.warn('[brookfield] terrain unavailable, world is flat', err?.message || err);
+  }
 
   await status('Indexing roads & buildings…');
   const roads = new RoadIndex(map);
@@ -135,11 +144,24 @@ async function main(saved = {}) {
     for (const h of ys) if (h <= low + 14) return h; // highest deck within a sane height of the ground
     return low;
   };
+  // Classic mode: real terrain (+ bridge decks) from the elevation grid; cheap enough to query freely.
+  const classicGround = (x, z, y) => roads.surfaceHeight(x, z, y);
+  const classicInit = (x, z, bridge) => roads.surfaceHeight(x, z, bridge ? 1e9 : T(x, z) + 0.5);
+  function useClassicGround() {
+    env.ground = map.terrain ? classicGround : null;
+    traffic.setGround(map.terrain ? classicGround : null, map.terrain ? classicInit : null, { cheap: true, blobs: false });
+    player.groundPending = false;
+    player.y = map.terrain ? classicInit(player.x, player.z, onBridge(player.x, player.z)) : 0;
+    player.vy = 0;
+    player.sync();
+  }
+  useClassicGround(); // default until/unless photoreal mode takes over
+  const photoActive = () => mode === 'photo';
   let groundPendingSince = 0;
   function afterMove() {
     traffic.clear();
     traffic._seeded = false;
-    if (mode === 'photo') { player.groundPending = true; groundPendingSince = performance.now(); }
+    if (mode === 'photo') { player.groundPending = true; groundPendingSince = performance.now(); } else useClassicGround();
     snapCamera();
   }
   function applyMode(m) {
@@ -159,9 +181,11 @@ async function main(saved = {}) {
     camera.far = on ? 4500 : 1650;
     camera.updateProjectionMatrix();
     env.trees = on ? null : world.treePoints;
-    env.ground = on ? groundFn : null;
-    traffic.setGround(on ? groundFn : null, on ? groundInitFn : null);
-    if (on) { player.groundPending = true; groundPendingSince = performance.now(); } else { player.groundPending = false; player.y = 0; player.vy = 0; player.slopePitch = 0; player.sync(); }
+    if (on) {
+      env.ground = groundFn;
+      traffic.setGround(groundFn, groundInitFn);
+      player.groundPending = true; groundPendingSince = performance.now();
+    } else useClassicGround();
     hud.setPhotoMode(on);
     document.getElementById('imagery-credit').hidden = on || !aerial;
     console.log(`[brookfield] mode: ${m}`);
@@ -189,8 +213,8 @@ async function main(saved = {}) {
   const tmp = new THREE.Vector3();
   function updateCamera(dt) {
     camTarget(tmp);
-    if (env.ground && CAM_MODES[camMode] !== 'top' && photo?.leveled) {
-      const gy = photo.groundAt(tmp.x, tmp.z, player.y + 6, 60);
+    if (env.ground && CAM_MODES[camMode] !== 'top') {
+      const gy = photoActive() ? (photo?.leveled ? photo.groundAt(tmp.x, tmp.z, player.y + 6, 60) : null) : T(tmp.x, tmp.z);
       if (gy !== null && tmp.y < gy + 1.2) tmp.y = gy + 1.2;
     }
     const mode = CAM_MODES[camMode];

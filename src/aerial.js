@@ -1,6 +1,7 @@
 // Streams real aerial photos (USDA NAIP, public domain) as the ground in classic mode:
 // one low-res overview for the whole map plus sharp 500 m tiles loaded around the player.
 import * as THREE from 'three';
+import { T } from './terrain.js';
 
 const NEAR = 900; // load full-res tiles whose center is within this distance
 const FAR = 1300; // and drop them beyond this one
@@ -25,7 +26,7 @@ export class AerialGround {
     this.manifest = await res.json();
     const ov = this.manifest.overview;
     const tex = await this.loadTexture(ov.file);
-    this.overview = this.makeQuad(ov, tex, -0.02);
+    this.overview = this.makeQuad(ov, tex, -0.3, 220);
     this.overview.renderOrder = -2;
     this.list = Object.entries(this.manifest.tiles).map(([key, t]) => ({ key, ...t, cx: (t.minX + t.maxX) / 2, cz: (t.minZ + t.maxZ) / 2 }));
     this.ready = true;
@@ -44,9 +45,14 @@ export class AerialGround {
   }
 
   // Flat quad covering an extent (local meters), with UVs so north is up in the image.
-  makeQuad(ext, tex, y) {
+  makeQuad(ext, tex, y, segs = 1) {
     const w = ext.maxX - ext.minX, h = ext.maxZ - ext.minZ;
-    const geo = new THREE.PlaneGeometry(w, h).rotateX(-Math.PI / 2).translate((ext.minX + ext.maxX) / 2, y, (ext.minZ + ext.maxZ) / 2);
+    // a grid draped over the real terrain (y = small offset above / below the ground)
+    const sx = Math.max(1, Math.round(segs)), sz = Math.max(1, Math.round((segs * h) / w));
+    const geo = new THREE.PlaneGeometry(w, h, sx, sz).rotateX(-Math.PI / 2).translate((ext.minX + ext.maxX) / 2, 0, (ext.minZ + ext.maxZ) / 2);
+    const p = geo.attributes.position;
+    for (let i = 0; i < p.count; i++) p.setY(i, T(p.getX(i), p.getZ(i)) + y);
+    geo.computeVertexNormals();
     // PlaneGeometry UV v=1 is at -z after rotation, i.e. north edge = top of the image. Matches.
     const mat = new THREE.MeshLambertMaterial({ map: tex });
     const mesh = new THREE.Mesh(geo, mat);
@@ -85,7 +91,7 @@ export class AerialGround {
       this.tiles.set(t.key, entry);
       this.inflight++;
       this.loadTexture(t.file).then((tex) => {
-        entry.mesh = this.makeQuad(t, tex, 0);
+        entry.mesh = this.makeQuad(t, tex, 0, 50); // ~10 m grid, same as the terrain data
         entry.loading = false;
       }).catch((err) => {
         console.warn('[aerial] tile failed', t.key, err?.message || err);

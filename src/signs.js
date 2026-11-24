@@ -150,7 +150,7 @@ export function buildSigns(map, bindex, fronts, group, assigned = assignPois(map
     const { f } = s;
     const ux = (f.bx - f.ax) / f.len, uz = (f.bz - f.az) / f.len;
     const off = 0.08;
-    const P = (along, up, o) => [f.ax + ux * along + f.nx * o, up, f.az + uz * along + f.nz * o];
+    const P = (along, up, o) => [f.ax + ux * along + f.nx * o, up + (f.base || 0), f.az + uz * along + f.nz * o];
     const [bg, fg] = PANELS[Math.floor(hash(s.key) * PANELS.length)];
     const bgc = lin(bg), fgc = lin(fg);
     const a0 = s.c - s.w / 2, a1 = s.c + s.w / 2, y0 = s.y - s.h / 2, y1 = s.y + s.h / 2;

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { BBOX, LAT0, LON0, M_PER_DEG_LAT, M_PER_DEG_LON, toX, toZ } from './geo.mjs';
 import { analyzeAerial } from './aerial-analysis.mjs';
 import { computeFurniture } from './street-furniture.mjs';
+import { buildTerrain } from './terrain-build.mjs';
 import { access } from 'node:fs/promises';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -370,6 +371,16 @@ try {
   console.log('No aerial imagery (run npm run fetch-aerial) - skipping roof colors / canopy trees');
 }
 
+// Real elevation (USGS 3DEP) + bridge deck heights, if the terrain has been fetched.
+let terrain = null;
+try {
+  await access(join(ROOT, 'data-raw', 'terrain.tif'));
+  terrain = await buildTerrain({ root: ROOT, roads, nodes, spawn });
+} catch (err) {
+  if (err.code !== 'ENOENT') throw err;
+  console.log('No terrain (run npm run fetch-terrain) - world stays flat');
+}
+
 const halfW = (M_PER_DEG_LON * (BBOX.east - BBOX.west)) / 2;
 const halfH = (M_PER_DEG_LAT * (BBOX.north - BBOX.south)) / 2;
 const map = {
@@ -387,6 +398,7 @@ const map = {
 };
 if (trees) map.trees = trees;
 map.furniture = furniture;
+if (terrain) map.terrain = terrain;
 map.pois = pois;
 
 await mkdir(dirname(OUT), { recursive: true });

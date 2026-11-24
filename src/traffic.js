@@ -283,10 +283,13 @@ export class Traffic {
   }
 
   // Switch between flat (classic) and mesh-following (photoreal) heights.
-  setGround(ground, groundInit) {
+  // cheap = height lookups are fast (terrain grid), so update every car every frame; otherwise
+  // (raycasts against the 3D tiles) spread them over frames.
+  setGround(ground, groundInit, { cheap = false, blobs = true } = {}) {
     this.ground = ground;
     this.groundInit = groundInit;
-    this.blobMesh.visible = !!groundInit;
+    this.groundCheap = cheap;
+    this.blobMesh.visible = !!groundInit && blobs;
     for (const c of this.cars) { c.yKnown = !groundInit; if (!groundInit) c.y = c.ty = 0; }
   }
 
@@ -374,20 +377,20 @@ export class Traffic {
     // heights: a few cars per frame (raycasts against the streamed 3D mesh)
     if (this.groundInit) {
       const n = this.cars.length;
-      let unknownBudget = 8;
+      let unknownBudget = this.groundCheap ? 1e9 : 8;
       for (const car of this.cars) {
         if (car.yKnown || unknownBudget <= 0) continue;
         unknownBudget--;
         const h = this.groundInit(car.x, car.z, !!this.map.roads[car.edge.road].b);
         if (h !== null) { car.y = car.ty = h; car.yKnown = true; }
       }
-      for (let k = 0; k < Math.min(n, 14); k++) {
+      for (let k = 0; k < (this.groundCheap ? n : Math.min(n, 14)); k++) {
         const car = this.cars[(this._rr++) % n];
         if (!car.yKnown) continue;
         const h = this.ground(car.x, car.z, car.y);
         if (h !== null) car.ty = h;
       }
-      const kY = Math.min(1, dt * 6);
+      const kY = this.groundCheap ? 1 : Math.min(1, dt * 6);
       for (const car of this.cars) car.y += (car.ty - car.y) * kY;
     }
 

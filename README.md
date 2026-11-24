@@ -52,7 +52,9 @@ A gamepad also works: left stick steers, RT is gas, LT is brake, A/B is handbrak
 
 The classic look uses only free, open data:
 
-- **Ground:** real aerial photos at 0.5 m per pixel (USDA NAIP via USGS, public domain), streamed in 500 m tiles around the car.
+- **Terrain:** real elevation from USGS 3DEP lidar (public domain), baked to a 10 m grid (`npm run fetch-terrain`, then `build-map`). It ranges from 219.7 m above sea level on W Underwood Pkwy to 295.8 m on Colline Vue Blvd. Ground, roads, buildings, trees, street furniture and all cars follow it. It was checked against Google's photogrammetry mesh: within about 1–2 m across 76 m of relief.
+- **Bridges:** bare-earth lidar has no bridges, so OSM bridge ways (chained when split) get a straight deck from abutment to abutment, with parapets. You can drive over them and under them.
+- **Ground:** real aerial photos at 0.5 m per pixel (USDA NAIP via USGS, public domain), streamed in 500 m tiles around the car and draped over the terrain.
 - **Roofs and trees:** roof colors come from the photos. Trees are placed where the infrared band shows tree canopy, about 147k of them.
 - **Buildings:** OpenStreetMap footprints with procedural facades: siding, brick and stucco with windows, garage and front doors facing the street, storefronts, office glass and warehouse docks. Roofs are gable or hip on houses, and flat with parapets and rooftop units on commercial buildings.
 - **Street furniture:** traffic signals cycle and AI traffic obeys them. Also stop signs, painted crosswalks, sidewalks, streetlights, green street-name signs, and business-name signs from OSM shops, restaurants and offices.
@@ -64,6 +66,7 @@ The facade textures and roof shapes are generic patterns, not copies of real bui
 ```bash
 npm run fetch-map -- --force   # downloads raw OSM data from Overpass into data-raw/
 npm run fetch-aerial           # downloads NAIP aerial tiles to public/aerial/ (+ infrared copies in data-raw/)
+npm run fetch-terrain          # downloads USGS 3DEP lidar elevation to data-raw/terrain.tif
 npm run build-map              # bakes everything into public/data/brookfield.json
 ```
 
