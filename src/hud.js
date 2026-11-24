@@ -58,6 +58,7 @@ export class Hud {
   // ---------- photoreal-mode bits ----------
   setPhotoMode(on) {
     this.$('photo-attr').hidden = !on;
+    this.$('cesium-credit').hidden = !on;
   }
 
   // Attributions from the 3D tiles: Google requires its logo plus the live data credits on screen.

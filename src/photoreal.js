@@ -34,7 +34,7 @@ export class Photoreal {
     tiles.lruCache.minSize = 900;
     tiles.lruCache.maxSize = 1600;
     tiles.setCamera(camera);
-    tiles.setResolutionFromRenderer(camera, renderer);
+    tiles.setResolution(camera, innerWidth, innerHeight);
 
     tiles.addEventListener('load-model', ({ scene: model }) => {
       this.loadedModels++;
@@ -82,9 +82,15 @@ export class Photoreal {
     this.root.visible = v;
   }
 
+  // Pick tile detail from CSS pixels, not device pixels: on a Retina screen the drawing buffer is 2x,
+  // which would make the tiles refine a whole extra level (~4x the downloads) for little visible gain.
+  setResolution() {
+    this.tiles.setResolution(this.camera, innerWidth, innerHeight);
+  }
+
   update() {
     if (this.failed) return;
-    this.tiles.setResolutionFromRenderer(this.camera, this.renderer);
+    this.setResolution();
     this.camera.updateMatrixWorld();
     this.tiles.update();
   }
