@@ -4,7 +4,9 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BBOX } from './bbox.mjs';
+import { BBOX, LAT0, LON0, M_PER_DEG_LAT, M_PER_DEG_LON, toX, toZ } from './geo.mjs';
+import { analyzeAerial } from './aerial-analysis.mjs';
+import { access } from 'node:fs/promises';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const RAW = join(ROOT, 'data-raw');
@@ -12,15 +14,10 @@ const OUT = join(ROOT, 'public', 'data', 'brookfield.json');
 
 const readRaw = async (n) => JSON.parse(await readFile(join(RAW, `${n}.json`), 'utf8'));
 
-// ---------- projection ----------
-const LAT0 = (BBOX.south + BBOX.north) / 2;
-const LON0 = (BBOX.west + BBOX.east) / 2;
-const phi = (LAT0 * Math.PI) / 180;
-const M_PER_DEG_LAT = 111132.954 - 559.822 * Math.cos(2 * phi) + 1.175 * Math.cos(4 * phi);
-const M_PER_DEG_LON = 111412.84 * Math.cos(phi) - 93.5 * Math.cos(3 * phi);
+// ---------- projection (shared with fetch-aerial.mjs) ----------
 const r1 = (v) => Math.round(v * 10) / 10;
-const projX = (lon) => r1((lon - LON0) * M_PER_DEG_LON);
-const projZ = (lat) => r1(-(lat - LAT0) * M_PER_DEG_LAT);
+const projX = (lon) => r1(toX(lon));
+const projZ = (lat) => r1(toZ(lat));
 
 // ---------- helpers ----------
 function hash(n) {
@@ -336,6 +333,18 @@ function findSpawn() {
 }
 const spawn = findSpawn();
 
+// Aerial photo analysis (roof colors + real tree positions), if the NAIP tiles have been fetched.
+let trees = null;
+try {
+  await access(join(ROOT, 'public', 'aerial', 'manifest.json'));
+  const debugTile = process.argv.find((a) => a.startsWith('--debug-tile='))?.split('=')[1] ?? null;
+  console.log('Analyzing aerial imagery…');
+  ({ trees } = await analyzeAerial({ root: ROOT, map: { nodes, roads, buildings }, debugTile }));
+} catch (err) {
+  if (err.code !== 'ENOENT') throw err;
+  console.log('No aerial imagery (run npm run fetch-aerial) - skipping roof colors / canopy trees');
+}
+
 const halfW = (M_PER_DEG_LON * (BBOX.east - BBOX.west)) / 2;
 const halfH = (M_PER_DEG_LAT * (BBOX.north - BBOX.south)) / 2;
 const map = {
@@ -351,6 +360,7 @@ const map = {
   areas,
   places,
 };
+if (trees) map.trees = trees;
 
 await mkdir(dirname(OUT), { recursive: true });
 const json = JSON.stringify(map);

@@ -5,6 +5,7 @@ import { PlayerCar } from './car.js';
 import { Traffic } from './traffic.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
+import { AerialGround } from './aerial.js';
 
 const CESIUM_TOKEN = (import.meta.env.VITE_CESIUM_TOKEN || '').trim();
 
@@ -33,7 +34,7 @@ async function main(saved = {}) {
 
   // renderer / scene
   const canvas = document.getElementById('scene');
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, reversedDepthBuffer: true, logarithmicDepthBuffer: true, powerPreference: 'high-performance' }); // reversed-Z when supported (keeps early depth test), log depth as fallback
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
@@ -44,8 +45,8 @@ async function main(saved = {}) {
   const scene = new THREE.Scene();
   const SKY = 0xa9c9e8;
   scene.background = new THREE.Color(SKY);
-  scene.fog = new THREE.Fog(SKY, 380, 2000);
-  const camera = new THREE.PerspectiveCamera(65, innerWidth / innerHeight, 0.3, 2600);
+  scene.fog = new THREE.Fog(SKY, 300, 1500);
+  const camera = new THREE.PerspectiveCamera(65, innerWidth / innerHeight, 0.3, 1650);
 
   scene.add(new THREE.HemisphereLight(0xdfeaff, 0x5b6a48, 1.35));
   const sun = new THREE.DirectionalLight(0xfff0d8, 2.7);
@@ -60,6 +61,21 @@ async function main(saved = {}) {
 
   const world = await buildWorld(map, roads, buildings, scene, status);
   console.log('[brookfield] world stats ' + JSON.stringify(world.stats));
+
+  // Real aerial photos as the ground (classic mode). The photo already shows lawns, parking lots and
+  // driveways, so the flat area polygons and parking-aisle/driveway ribbons are hidden once it loads.
+  let aerial = null;
+  try {
+    aerial = new AerialGround({ group: world.group, renderer });
+    await aerial.load();
+    for (const m of world.group.children) if (m.name === 'areas' || m.name === 'roads-minor') m.visible = false;
+    const ground = world.group.getObjectByName('ground');
+    if (ground) ground.position.y = -0.08; // overview photo sits above the grass fallback
+    document.getElementById('imagery-credit').hidden = false;
+  } catch (err) {
+    console.warn('[brookfield] aerial imagery unavailable, using drawn ground', err?.message || err);
+    aerial = null;
+  }
 
   await status('Starting traffic…');
   const traffic = new Traffic(map, scene, { maxCars: 150 });
@@ -137,15 +153,16 @@ async function main(saved = {}) {
     photo?.setVisible(on);
     sun.castShadow = !on;
     player.blob.visible = on;
-    scene.fog.near = on ? 700 : 380;
-    scene.fog.far = on ? 3400 : 2000;
-    camera.far = on ? 4500 : 2600;
+    scene.fog.near = on ? 700 : 300;
+    scene.fog.far = on ? 3400 : 1500;
+    camera.far = on ? 4500 : 1650;
     camera.updateProjectionMatrix();
     env.trees = on ? null : world.treePoints;
     env.ground = on ? groundFn : null;
     traffic.setGround(on ? groundFn : null, on ? groundInitFn : null);
     if (on) { player.groundPending = true; groundPendingSince = performance.now(); } else { player.groundPending = false; player.y = 0; player.vy = 0; player.slopePitch = 0; player.sync(); }
     hud.setPhotoMode(on);
+    document.getElementById('imagery-credit').hidden = on || !aerial;
     console.log(`[brookfield] mode: ${m}`);
   }
 
@@ -251,6 +268,7 @@ async function main(saved = {}) {
   let fpsAcc = 0, fpsFrames = 0;
   const stats = { fps: 0 };
   let attrTimer = 0;
+  let lodTimer = 0;
   function frame(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
@@ -280,6 +298,11 @@ async function main(saved = {}) {
       player.updateVertical(dt, env);
       if (player.impact > 4) shake = Math.min(1.2, player.impact * 0.08);
       traffic.update(dt, player);
+    }
+    if (mode === 'classic') {
+      if (aerial) aerial.update(player.x, player.z);
+      lodTimer -= dt;
+      if (lodTimer <= 0) { lodTimer = 0.5; world.updateLod(player.x, player.z); }
     }
     updateCamera(dt);
     updateSun();
@@ -313,7 +336,7 @@ async function main(saved = {}) {
   updateHint();
 
   // handle for debugging / automated checks
-  window.__game = { THREE, map, roads, buildings, world, traffic, player, renderer, scene, camera, hud, input, stats, placeOnRoad, afterMove, applyMode, get mode() { return mode; }, get photo() { return photo; }, setCam: (i) => { camMode = i; } };
+  window.__game = { THREE, map, get aerial() { return aerial; }, roads, buildings, world, traffic, player, renderer, scene, camera, hud, input, stats, placeOnRoad, afterMove, applyMode, get mode() { return mode; }, get photo() { return photo; }, setCam: (i) => { camMode = i; } };
 }
 
 function boot(saved) {

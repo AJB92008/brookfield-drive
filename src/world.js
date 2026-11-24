@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { makeDetailTexture } from './textures.js';
 import { Grid, pointInRing, PointIndex } from './spatial.js';
+import { buildBuildings as buildDetailedBuildings } from './buildings.js';
 
 const TILE = 500; // meters; static geometry is merged per tile so frustum culling works
 
@@ -28,6 +29,8 @@ const WALLS = {
 };
 const ROOF_SLOPED = [0x4a4a4d, 0x5b4c42, 0x3e444a, 0x6a5e55, 0x55524f].map(lin);
 const ROOF_FLAT = [0x8f8f8d, 0x9b9a96, 0x7f8184, 0xa6a39d].map(lin);
+
+const fromSRGB = (rgb) => { const c = new THREE.Color().setRGB(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, THREE.SRGBColorSpace); return [c.r, c.g, c.b]; };
 
 const WHITE = lin(0xf2f2ee);
 const YELLOW = lin(0xe7bd34);
@@ -288,7 +291,11 @@ function buildRoads(map, group, mats) {
   const polys = roads.map((r) => polyline(P(r)));
 
   // Surfaces: service roads first so major roads draw cleanly over them (same color anyway).
-  roads.forEach((r, ri) => ribbon(surface, polys[ri], r.w / 2, LAYER_Y.road, null));
+  // Parking aisles and driveways go in their own meshes: the aerial photo already shows them,
+  // so they can be hidden when it's loaded (they stay in the road index for physics).
+  const minor = new Tiles();
+  const isMinor = (r) => r.t === 'service' && (r.sv === 'parking_aisle' || r.sv === 'driveway');
+  roads.forEach((r, ri) => ribbon(isMinor(r) ? minor : surface, polys[ri], r.w / 2, LAYER_Y.road, null));
 
   // Junction / end-cap discs
   for (const [n, list] of inc) {
@@ -297,7 +304,8 @@ function buildRoads(map, group, mats) {
     for (const e of list) if (e.end) { anyEnd = true; r = Math.max(r, roads[e.ri].w / 2); }
     if (!anyEnd) continue;
     if (list.length === 1 && roads[list[0].ri].t === 'service') continue; // driveway ends
-    surface.at(nodes[n * 2], nodes[n * 2 + 1]).disc(nodes[n * 2], nodes[n * 2 + 1], r, LAYER_Y.road, null, 12);
+    const allMinor = list.every((e) => isMinor(roads[e.ri]));
+    (allMinor ? minor : surface).at(nodes[n * 2], nodes[n * 2 + 1]).disc(nodes[n * 2], nodes[n * 2 + 1], r, LAYER_Y.road, null, 12);
   }
 
   // Markings
@@ -323,7 +331,8 @@ function buildRoads(map, group, mats) {
     }
   });
 
-  const tris = surface.addTo(group, mats.road, { uvScale: 7, name: 'roads' }) + paint.addTo(group, mats.paint, { name: 'paint' });
+  const tris = surface.addTo(group, mats.road, { uvScale: 7, name: 'roads' }) + paint.addTo(group, mats.paint, { name: 'paint' })
+    + minor.addTo(group, mats.road, { uvScale: 7, name: 'roads-minor' });
   return { tris, polys };
 }
 
@@ -425,7 +434,7 @@ function buildBuildings(map, bindex, group, mats) {
 
     const sloped = (b.k === 'h' || b.k === 'g') && n <= 12 && isConvex(p);
     if (sloped) {
-      const roof = ROOF_SLOPED[Math.floor(r2 * ROOF_SLOPED.length)];
+      const roof = b.rc ? fromSRGB(b.rc) : ROOF_SLOPED[Math.floor(r2 * ROOF_SLOPED.length)];
       const rh = b.k === 'g' ? 0.9 : Math.min(3.2, 0.3 * Math.sqrt(area));
       const apex = [cx, h + rh, cz];
       for (let i = 0; i < n; i++) {
@@ -433,7 +442,7 @@ function buildBuildings(map, bindex, group, mats) {
         g.tri([p[i * 2], h, p[i * 2 + 1]], [p[j * 2], h, p[j * 2 + 1]], apex, roof, 0, 1, 0);
       }
     } else {
-      const roof = ROOF_FLAT[Math.floor(r2 * ROOF_FLAT.length)];
+      const roof = b.rc ? fromSRGB(b.rc) : ROOF_FLAT[Math.floor(r2 * ROOF_FLAT.length)];
       const contour = [];
       for (let i = 0; i < n; i++) contour.push(new THREE.Vector2(p[i * 2], p[i * 2 + 1]));
       let faces;
@@ -480,8 +489,14 @@ function buildTrees(map, roadIndex, bindex, group, mats, bounds) {
   };
 
   const trees = []; // [x, z, scale, kind]
-  // Dense trees in woods/forests, sparse in parks.
-  for (const a of map.areas) {
+  if (map.trees?.length) {
+    // Real tree positions detected from the aerial photo's canopy (already cleared of roads/buildings).
+    const t = map.trees;
+    for (let k = 0; k < t.length; k += 4) trees.push([t[k], t[k + 1], t[k + 2], t[k + 3]]);
+  }
+  const fromAerial = trees.length;
+  // Dense trees in woods/forests, sparse in parks (fallback when no aerial canopy data).
+  if (!fromAerial) for (const a of map.areas) {
     const density = a.k === 'forest' ? 1 / 140 : a.k === 'reserve' || a.k === 'wetland' ? 1 / 400 : a.k === 'park' || a.k === 'golf' ? 1 / 900 : 0;
     if (!density) continue;
     let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity, area = 0;
@@ -502,7 +517,7 @@ function buildTrees(map, roadIndex, bindex, group, mats, bounds) {
   }
   const forestCount = trees.length;
   // Yard trees around houses (Brookfield is a leafy suburb).
-  map.buildings.forEach((b, bi) => {
+  if (!fromAerial) map.buildings.forEach((b, bi) => {
     if (b.k !== 'h') return;
     const p = bindex.rings[bi];
     let cx = 0, cz = 0;
@@ -522,7 +537,7 @@ function buildTrees(map, roadIndex, bindex, group, mats, bounds) {
   });
   const yardCount = trees.length - forestCount;
   // Trees scattered everywhere else.
-  const SCATTER = 7000;
+  const SCATTER = fromAerial ? 0 : 7000;
   for (let t = 0, tries = 0; t < SCATTER && tries < SCATTER * 6; tries++) {
     const x = bounds.minX + rand() * (bounds.maxX - bounds.minX);
     const z = bounds.minZ + rand() * (bounds.maxZ - bounds.minZ);
@@ -537,7 +552,7 @@ function buildTrees(map, roadIndex, bindex, group, mats, bounds) {
   const pineGeo = new THREE.ConeGeometry(2.1, 6.5, 7).translate(0, 5.0, 0);
   const buckets = new Map();
   for (const tr of trees) {
-    const k = `${Math.floor(tr[0] / 1000)},${Math.floor(tr[1] / 1000)}`;
+    const k = `${Math.floor(tr[0] / 300)},${Math.floor(tr[1] / 300)}`;
     if (!buckets.has(k)) buckets.set(k, []);
     buckets.get(k).push(tr);
   }
@@ -570,6 +585,8 @@ function buildTrees(map, roadIndex, bindex, group, mats, bounds) {
       }
       points.add(x, z, 0.45 * sc);
     });
+    const tcx = list.reduce((a, t) => a + t[0], 0) / list.length, tcz = list.reduce((a, t) => a + t[1], 0) / list.length;
+    trunks.userData = { trunk: true, cx: tcx, cz: tcz };
     for (const im of [trunks, leaves, pinesM]) {
       if (!im.count) continue;
       im.castShadow = true;
@@ -622,11 +639,14 @@ export async function buildWorld(map, roadIndex, bindex, scene, progress = async
   const areas = buildAreas(map, group, mats);
   stats.areaTris = areas.tris; stats.areaFailed = areas.failed;
   await progress('Raising buildings…');
-  const blds = buildBuildings(map, bindex, group, mats);
-  stats.buildingTris = blds.tris; stats.buildingFailed = blds.failed;
+  const blds = buildDetailedBuildings(map, bindex, roadIndex, group);
+  stats.buildingTris = blds.tris; stats.buildingFailed = blds.failed; stats.roofs = blds.roofs;
   await progress('Growing trees…');
   const trees = buildTrees(map, roadIndex, bindex, group, mats, b);
   stats.trees = trees.count; stats.forestTrees = trees.forestCount; stats.yardTrees = trees.yardCount;
   stats.meshes = group.children.length;
-  return { group, stats, treePoints: trees.points };
+  // Trunks are invisible at a distance; skip drawing them beyond ~700 m.
+  const trunkMeshes = group.children.filter((m) => m.userData?.trunk);
+  const updateLod = (x, z) => { for (const m of trunkMeshes) m.visible = Math.hypot(m.userData.cx - x, m.userData.cz - z) < 700; };
+  return { group, stats, treePoints: trees.points, fronts: blds.fronts, updateLod };
 }
