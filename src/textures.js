@@ -53,3 +53,49 @@ export function makeDetailTexture({ seed = 1, lo = 0.72, hi = 1.0, grain = 0.12 
   tex.anisotropy = 8;
   return tex;
 }
+
+// Road surface: grayscale asphalt grain + cracks, sealed crack lines and patch repairs.
+// Multiplies the road color; one repeat covers ~28 m so the pattern doesn't visibly tile.
+export function makeAsphaltTexture({ seed = 11 } = {}) {
+  const size = 1024;
+  const rand = mulberry32(seed);
+  const base = tileableNoise(size, 16, rand), fine = tileableNoise(size, 128, rand);
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  for (let i = 0; i < size * size; i++) {
+    const v = 0.8 + base[i] * 0.1 + fine[i] * 0.06 + (rand() - 0.5) * 0.08;
+    const c = Math.round(Math.min(1, v) * 255);
+    img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = c;
+    img.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  // patch repairs (slightly darker, crisp edges)
+  for (let k = 0; k < 7; k++) {
+    const w = 60 + rand() * 180, h = 40 + rand() * 120, x = rand() * size, y = rand() * size;
+    ctx.fillStyle = `rgba(0,0,0,${0.06 + rand() * 0.06})`;
+    for (const [dx, dy] of [[0, 0], [-size, 0], [0, -size], [-size, -size]]) ctx.fillRect(x + dx, y + dy, w, h);
+  }
+  // cracks: jagged random walks, wrapped so the texture still tiles
+  const crack = (x, y, ang, len, width, alpha) => {
+    ctx.strokeStyle = `rgba(0,0,0,${alpha})`;
+    ctx.lineWidth = width;
+    ctx.lineCap = 'round';
+    const pts = [[x, y]];
+    let px = x, py = y, a = ang;
+    for (let s = 0; s < len; s += 6) { a += (rand() - 0.5) * 0.9; px += Math.cos(a) * 6; py += Math.sin(a) * 6; pts.push([px, py]); }
+    for (const [dx, dy] of [[0, 0], [size, 0], [-size, 0], [0, size], [0, -size]]) {
+      ctx.beginPath();
+      pts.forEach(([qx, qy], i) => (i ? ctx.lineTo(qx + dx, qy + dy) : ctx.moveTo(qx + dx, qy + dy)));
+      ctx.stroke();
+    }
+  };
+  for (let k = 0; k < 26; k++) crack(rand() * size, rand() * size, rand() * Math.PI * 2, 60 + rand() * 260, 1 + rand() * 1.6, 0.22 + rand() * 0.2);
+  for (let k = 0; k < 6; k++) crack(rand() * size, rand() * size, rand() * Math.PI * 2, 200 + rand() * 300, 5 + rand() * 4, 0.12); // sealed (tar) cracks
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(0.25, 0.25);
+  tex.anisotropy = 8;
+  return tex;
+}

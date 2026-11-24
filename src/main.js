@@ -148,6 +148,7 @@ async function main(saved = {}) {
       m = 'classic';
     }
     mode = m;
+    try { localStorage.setItem('brookfield-drive-mode', m); } catch { /* storage unavailable */ }
     const on = m === 'photo';
     world.group.visible = !on;
     photo?.setVisible(on);
@@ -258,7 +259,9 @@ async function main(saved = {}) {
         token: CESIUM_TOKEN, origin: map.origin, camera, renderer, scene,
         onError: () => { if (mode === 'photo') applyMode('classic'); },
       });
-      applyMode('photo');
+      let saved = null;
+      try { saved = localStorage.getItem('brookfield-drive-mode'); } catch { /* storage unavailable */ }
+      applyMode(saved === 'classic' ? 'classic' : 'photo'); // remembers your last choice (P)
     } catch (err) {
       console.warn('[brookfield] photoreal init failed', err);
     }

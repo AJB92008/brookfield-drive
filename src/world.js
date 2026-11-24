@@ -1,6 +1,6 @@
 // Builds all static scenery meshes from the baked OSM map.
 import * as THREE from 'three';
-import { makeDetailTexture } from './textures.js';
+import { makeDetailTexture, makeAsphaltTexture } from './textures.js';
 import { Grid, pointInRing, PointIndex } from './spatial.js';
 import { buildBuildings as buildDetailedBuildings } from './buildings.js';
 import { buildFurniture } from './furniture.js';
@@ -610,7 +610,7 @@ export async function buildWorld(map, roadIndex, bindex, scene, progress = async
 
   const detail = makeDetailTexture({ seed: 7 });
   const mats = {
-    road: new THREE.MeshLambertMaterial({ color: 0x6a6c70, map: detail }),
+    road: new THREE.MeshLambertMaterial({ color: 0x6f7175, map: makeAsphaltTexture() }),
     paint: new THREE.MeshLambertMaterial({ vertexColors: true }),
     area: new THREE.MeshLambertMaterial({ vertexColors: true, map: detail }),
     vertexColored: new THREE.MeshLambertMaterial({ vertexColors: true }),
