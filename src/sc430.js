@@ -31,7 +31,25 @@ const RHO = 1.225, CRR = 0.012, DRIVELINE = 0.86;
 const IDLE = 650, REDLINE = 6000, FUEL_CUT = 6250, STALL = 2400, TC_MULT = 2.0;
 const MU = 0.93; // summer performance tires (effective, with TRAC/VSC intervening)
 const CG_H = 0.5, REAR_STATIC = 0.47; // CG height (m), static rear weight fraction
-const MAX_STEER = Math.asin(SC430.wheelbaseM / (SC430.turningCircleM / 2)); // ~29 deg from the turning circle
+// Steering lock that gives a curb-to-curb turning circle (outer front tire path) of diameter d meters
+// (the physics turns the car about its center: center-path radius = wheelbase / tan(steer),
+//  outer front tire sits half a wheelbase ahead and half a track outward of that path)
+const steerForCircle = (d) => Math.atan(SC430.wheelbaseM / (Math.sqrt((d / 2) ** 2 - (SC430.wheelbaseM / 2) ** 2) - SC430.trackF / 2));
+const MAX_STEER = steerForCircle(SC430.turningCircleM); // matches the official 10.8 m (35.4 ft) turning circle
+
+// Stock = the real car. Sport = more power, no limiter, stickier tires, quicker shifts, tighter steering.
+export const TUNES = {
+  stock: { label: 'Stock', powerMult: 1, revLimit: FUEL_CUT, shiftRpm: REDLINE - 250, mu: MU, maxSteer: MAX_STEER, steerFalloff: 20, steerRate: 6, latG: 0.92, upshiftTime: 0.42, downshiftTime: 0.28, limiterMph: SC430.topSpeedMph },
+  sport: { label: 'Sport tune', powerMult: 1.5, revLimit: 6800, shiftRpm: 6600, mu: 1.12, maxSteer: steerForCircle(8.5), /* 27.9 ft turning circle */ steerFalloff: 34, steerRate: 9, latG: 1.05, upshiftTime: 0.18, downshiftTime: 0.15, limiterMph: null },
+};
+const turningCircleFt = (t) => {
+  const rCenter = SC430.wheelbaseM / Math.tan(t.maxSteer);
+  return 2 * Math.hypot(rCenter + SC430.trackF / 2, SC430.wheelbaseM / 2) * 3.281;
+};
+export const tuneSummary = (t) => ({
+  hp: Math.round(SC430.hp * t.powerMult), lbft: Math.round(SC430.torqueLbFt * t.powerMult),
+  limiter: t.limiterMph ? `${t.limiterMph} mph (limited)` : 'none (rev-limited)', turningFt: turningCircleFt(t).toFixed(1),
+});
 // 3UZ-FE full-throttle torque (N·m) vs rpm, anchored to 440 N·m @ 3400 and 223 kW (300 hp) @ 5600
 const TORQUE = [[600, 300], [1000, 335], [2000, 392], [3000, 432], [3400, 440], [4000, 433], [4600, 418], [5000, 405], [5600, 380], [6000, 352], [6250, 330]];
 export function engineTorque(rpm) {
@@ -305,6 +323,8 @@ export class PlayerCar {
     this.brakeMat = model.brakeLights;
     this.length = SC430.lengthM;
     this.spec = SC430;
+    this.tuneName = 'sport';
+    this.tune = TUNES.sport;
     this.blob = new THREE.Mesh(new THREE.PlaneGeometry(2.3, 5.2).rotateX(-Math.PI / 2).translate(0, 0.06, 0), new THREE.MeshBasicMaterial({ map: blobTexture(), transparent: true, depthWrite: false, toneMapped: false }));
     this.blob.visible = false;
     this.blob.renderOrder = 1;
@@ -325,6 +345,11 @@ export class PlayerCar {
     this.impact = 0;
     this.bodyRoll = 0; this.bodyPitch = 0;
     this.offRoad = false;
+  }
+
+  setTune(name) {
+    this.tuneName = TUNES[name] ? name : 'sport';
+    this.tune = TUNES[this.tuneName];
   }
 
   place(x, z, heading) {
@@ -349,7 +374,8 @@ export class PlayerCar {
 
     this.onRoadIdx = env.roads.roadAt(this.x, this.z);
     this.offRoad = this.onRoadIdx === null;
-    const mu = this.offRoad ? 0.65 : MU;
+    const T = this.tune;
+    const mu = this.offRoad ? 0.65 : T.mu;
     let throttle = input.throttle, brake = input.brake;
 
     // Gear selection: S held at a standstill selects reverse; W selects drive again.
@@ -370,13 +396,13 @@ export class PlayerCar {
       engineRpm = Math.max(lockedRpm, stallTarget);
       tcMult = 1 + (TC_MULT - 1) * Math.max(0, 1 - lockedRpm / Math.max(stallTarget, 1));
     } else engineRpm = lockedRpm;
-    this.rpm += (Math.min(engineRpm, FUEL_CUT) - this.rpm) * Math.min(1, dt * 12);
+    this.rpm += (Math.min(engineRpm, T.revLimit) - this.rpm) * Math.min(1, dt * 12);
 
     let driveForce = 0;
-    const limited = this.gear > 0 && vf >= SC430.topSpeedMph * MPH;
-    if (throttle > 0 && engineRpm < FUEL_CUT && !limited) {
+    const limited = this.gear > 0 && T.limiterMph && vf >= T.limiterMph * MPH;
+    if (throttle > 0 && engineRpm < T.revLimit && !limited) {
       const shiftCut = this.shiftTimer > 0 ? 0.35 : 1;
-      driveForce = (engineTorque(engineRpm) * throttle * tcMult * total * DRIVELINE * shiftCut) / TIRE_R;
+      driveForce = (engineTorque(Math.min(engineRpm, FUEL_CUT)) * T.powerMult * throttle * tcMult * total * DRIVELINE * shiftCut) / TIRE_R;
     } else if (!throttle && lockedRpm > IDLE * 1.2) {
       // engine braking (closed throttle)
       driveForce = -((25 + 0.006 * lockedRpm) * total * DRIVELINE) / TIRE_R;
@@ -407,18 +433,18 @@ export class PlayerCar {
     this.shiftTimer = Math.max(0, this.shiftTimer - dt);
     if (this.gear > 0 && this.shiftTimer === 0) {
       const rpmIn = (g) => wheelRpm * SC430.gears[g - 1] * SC430.finalDrive;
-      const upAt = 1900 + (REDLINE - 250 - 1900) * throttle;
+      const upAt = 1900 + (T.shiftRpm - 1900) * throttle;
       const downAt = 1150 + 2400 * throttle;
-      if (this.gear < 5 && rpmIn(this.gear) > upAt && rpmIn(this.gear + 1) > 1100) { this.gear++; this.shiftTimer = 0.42; }
-      else if (this.gear > 1 && rpmIn(this.gear) < downAt && rpmIn(this.gear - 1) < REDLINE - 400) { this.gear--; this.shiftTimer = 0.28; }
+      if (this.gear < 5 && rpmIn(this.gear) > upAt && rpmIn(this.gear + 1) > 1100) { this.gear++; this.shiftTimer = T.upshiftTime; }
+      else if (this.gear > 1 && rpmIn(this.gear) < downAt && rpmIn(this.gear - 1) < T.shiftRpm - 400) { this.gear--; this.shiftTimer = T.downshiftTime; }
     }
 
     // ----- steering & lateral grip -----
-    this.steer += (input.steer - this.steer) * Math.min(1, dt * 6);
+    this.steer += (input.steer - this.steer) * Math.min(1, dt * T.steerRate);
     const absV = Math.abs(vf);
-    const steerAngle = this.steer * MAX_STEER / (1 + absV / 20); // keyboard steering: less lock at speed
+    const steerAngle = (this.steer * T.maxSteer) / (1 + Math.max(0, absV - 5) / T.steerFalloff); // full lock at parking speeds, less at highway speeds (keyboard steering)
     let yaw = (vf / SC430.wheelbaseM) * Math.tan(steerAngle);
-    const latMax = (input.handbrake ? 1.35 : 0.92) * mu * G;
+    const latMax = (input.handbrake ? T.latG * 1.45 : T.latG) * mu * G; // cornering grip
     const maxYaw = Math.min(2.5, latMax / Math.max(absV, 0.5));
     yaw = Math.max(-maxYaw, Math.min(maxYaw, yaw));
     this.heading -= yaw * dt;

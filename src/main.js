@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoadIndex, BuildingIndex } from './spatial.js';
 import { buildWorld } from './world.js';
-import { PlayerCar } from './sc430.js';
+import { PlayerCar, tuneSummary } from './sc430.js';
 import { Traffic } from './traffic.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
@@ -239,6 +239,19 @@ async function main(saved = {}) {
   input.on('KeyT', () => { traffic.enabled = !traffic.enabled; if (!traffic.enabled) traffic.clear(); traffic._seeded = false; });
   input.on('KeyH', () => helpEl.classList.toggle('hidden'));
   input.on('KeyI', () => { const el = document.getElementById('spec'); el.hidden = !el.hidden; });
+  // Stock (the real car) vs Sport tune; remembered between visits
+  function applyTune(name) {
+    player.setTune(name);
+    try { localStorage.setItem('brookfield-drive-tune', player.tuneName); } catch { /* storage unavailable */ }
+    const t = player.tune, sum = tuneSummary(t);
+    document.getElementById('tune-name').textContent = t.label;
+    document.querySelector('#speedo .redline').style.left = `${(t.shiftRpm / 7000) * 100}%`;
+    document.getElementById('spec-tune').innerHTML = `<b>Driving now: ${t.label}</b> — ${sum.hp} hp, ${sum.lbft} lb-ft, limiter ${sum.limiter}, turning circle ${sum.turningFt} ft${player.tuneName === 'stock' ? ' (real car)' : ''}`;
+  }
+  let savedTune = null;
+  try { savedTune = localStorage.getItem('brookfield-drive-tune'); } catch { /* storage unavailable */ }
+  applyTune(savedTune || 'sport');
+  input.on('KeyK', () => { applyTune(player.tuneName === 'sport' ? 'stock' : 'sport'); hud.toast(`${player.tune.label}: ${tuneSummary(player.tune).hp} hp`, 2500); });
   setTimeout(() => helpEl.classList.add('hidden'), 20000);
 
   addEventListener('resize', () => {
