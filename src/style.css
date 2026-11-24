@@ -1,0 +1,65 @@
+* { box-sizing: border-box; }
+:root { color-scheme: dark; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #0f1418; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; color: #fff; }
+#scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+kbd { display: inline-block; min-width: 1.5em; padding: 0 0.35em; margin: 0 0.1em; border-radius: 4px; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.25); font: 600 11px/1.6 ui-monospace, monospace; text-align: center; }
+
+#loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: radial-gradient(circle at 50% 40%, #23313b, #0d1216); z-index: 10; transition: opacity 0.6s; }
+#loading.done { opacity: 0; pointer-events: none; }
+#loading .title { font-weight: 900; font-size: clamp(28px, 6vw, 56px); letter-spacing: 0.08em; }
+#loading .sub { opacity: 0.7; font-size: 14px; text-align: center; padding: 0 16px; }
+#loading .status { margin-top: 18px; font-size: 14px; opacity: 0.9; }
+#loading .bar { width: min(320px, 80vw); height: 4px; background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden; }
+#loading .fill { height: 100%; width: 0; background: #e84a3c; transition: width 0.3s; }
+#loading.error .status { color: #ff8a80; max-width: 80vw; text-align: center; }
+
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 2; }
+#top { position: absolute; top: calc(14px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; }
+#street-sign { display: flex; align-items: center; gap: 10px; padding: 6px 16px; border-radius: 6px; background: #1f6b3a; border: 2px solid #f4f4f4; box-shadow: 0 2px 10px rgba(0,0,0,0.35); font-weight: 700; font-size: 20px; white-space: nowrap; transition: opacity 0.3s; }
+#street-sign.off { opacity: 0.45; background: #3a4148; }
+.shield { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 14px; font-weight: 800; }
+.shield.interstate { background: #1d4fa3; border: 2px solid #fff; box-shadow: inset 0 5px 0 #c7262c; padding-top: 4px; }
+.shield.us { background: #fff; color: #111; border: 2px solid #111; }
+.shield.state { background: #fff; color: #111; border-radius: 50%; }
+.shield.county { background: #1a3e78; color: #f6d34a; border: 2px solid #f6d34a; }
+#place { font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.9; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+
+#minimap { position: absolute; left: calc(18px + env(safe-area-inset-left, 0px)); bottom: calc(34px + env(safe-area-inset-bottom, 0px)); width: 210px; height: 210px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.85); box-shadow: 0 4px 18px rgba(0,0,0,0.45); }
+#traffic-count { position: absolute; left: calc(18px + env(safe-area-inset-left, 0px)); bottom: calc(12px + env(safe-area-inset-bottom, 0px)); width: 210px; text-align: center; font-size: 11px; opacity: 0.75; text-shadow: 0 1px 3px #000; }
+
+#speedo { position: absolute; right: calc(22px + env(safe-area-inset-right, 0px)); bottom: calc(30px + env(safe-area-inset-bottom, 0px)); min-width: 190px; padding: 10px 16px 12px; border-radius: 12px; background: rgba(12,16,20,0.55); backdrop-filter: blur(4px); }
+#speedo .row { display: flex; align-items: baseline; gap: 8px; justify-content: flex-end; }
+#speed { font-size: 54px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; }
+#speedo .unit { font-size: 14px; opacity: 0.7; font-weight: 700; }
+#gear { margin-left: 6px; font-size: 18px; font-weight: 800; color: #ffcf4a; }
+#speedo .track { margin-top: 8px; height: 5px; border-radius: 3px; background: rgba(255,255,255,0.15); overflow: hidden; }
+#speed-bar { height: 100%; width: 0; background: linear-gradient(90deg, #4ad66d, #ffd24a 60%, #ff4a4a); }
+
+#help { position: absolute; top: calc(14px + env(safe-area-inset-top, 0px)); left: calc(14px + env(safe-area-inset-left, 0px)); padding: 10px 14px; border-radius: 10px; background: rgba(12,16,20,0.6); font-size: 12px; line-height: 1.9; transition: opacity 0.5s; }
+#help.hidden { opacity: 0; }
+#attribution { position: absolute; right: calc(8px + env(safe-area-inset-right, 0px)); bottom: calc(4px + env(safe-area-inset-bottom, 0px)); font-size: 10px; opacity: 0.8; pointer-events: auto; text-shadow: 0 1px 2px #000; }
+#attribution a { color: #cfe3ff; }
+
+#bigmap { position: fixed; inset: 0; z-index: 5; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: rgba(8,12,14,0.82); }
+#bigmap.open { display: flex; }
+#bigmap .caption { font-size: 13px; opacity: 0.85; }
+#bigmap-canvas { border-radius: 8px; box-shadow: 0 6px 30px rgba(0,0,0,0.6); cursor: crosshair; }
+
+@media (max-width: 640px) {
+  #minimap { width: 140px; height: 140px; left: 10px; }
+  #traffic-count { width: 140px; left: 10px; }
+  #speedo { right: 10px; min-width: 130px; }
+  #speed { font-size: 38px; }
+  #help { display: none; }
+  #street-sign { font-size: 15px; }
+}
+
+#focus-hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 12px 22px; border-radius: 999px; background: rgba(12,16,20,0.78); border: 1px solid rgba(255,255,255,0.3); font-weight: 700; font-size: 16px; letter-spacing: 0.02em; }
+@media (prefers-reduced-motion: reduce) { #loading, #help, #street-sign, #loading .fill { transition: none; } }
+
+#toast { position: absolute; top: calc(96px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); max-width: min(560px, 90vw); padding: 10px 16px; border-radius: 10px; background: rgba(12,16,20,0.82); font-size: 14px; line-height: 1.4; text-align: center; }
+#loading-chip { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 12px 20px; border-radius: 999px; background: rgba(12,16,20,0.8); font-weight: 700; }
+#photo-attr { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(6px + env(safe-area-inset-bottom, 0px)); display: flex; align-items: center; gap: 8px; max-width: min(640px, 60vw); font-size: 10px; text-shadow: 0 1px 2px #000; pointer-events: auto; }
+#photo-attr img { height: 18px; width: auto; flex: none; }
+#photo-attr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+#photo-attr a { color: #cfe3ff; flex: none; }

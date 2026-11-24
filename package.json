@@ -1,0 +1,22 @@
+{
+  "name": "brookfield-drive",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "fetch-map": "node scripts/fetch-osm.mjs",
+    "build-map": "node scripts/build-map.mjs",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "build:artifact": "VITE_CESIUM_TOKEN= vite build && node scripts/build-artifact.mjs"
+  },
+  "dependencies": {
+    "3d-tiles-renderer": "^0.5.4",
+    "three": "^0.187.0",
+    "three-mesh-bvh": "^0.9.18"
+  },
+  "devDependencies": {
+    "vite": "^8.3.8"
+  }
+}
