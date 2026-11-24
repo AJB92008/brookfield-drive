@@ -64,6 +64,9 @@ export class Photoreal {
 
     // Parent group lets us shift the whole mesh vertically so the ground near spawn sits at y≈0.
     this.root = new THREE.Group();
+    // ReorientationPlugin puts east at -X and north at +Z; our OSM frame is east = +X, north = -Z.
+    // A half turn about Y lines the two up (measured: spawn lands within ~1 m of its OSM position).
+    this.root.rotation.y = Math.PI;
     this.root.add(tiles.group);
     scene.add(this.root);
     this.tiles = tiles;

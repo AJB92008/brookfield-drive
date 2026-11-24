@@ -257,7 +257,12 @@ async function main(saved = {}) {
     input.poll();
     if (photo && mode === 'photo') {
       photo.update();
-      if (!photo.leveled) photo.levelAt(player.x, player.z);
+      // Calibrate "ground = y 0" once the detailed tiles have finished streaming (coarse tiles are tens of m off).
+      if (!photo.leveled && photo.rootLoaded) {
+        photo.firstRootAt ||= performance.now();
+        const busy = (photo.tiles.stats?.downloading || 0) + (photo.tiles.stats?.parsing || 0) > 0;
+        if (!busy || performance.now() - photo.firstRootAt > 10000) photo.levelAt(player.x, player.z);
+      }
       if (player.groundPending && photo.leveled) {
         const busy = (photo.tiles.stats?.downloading || 0) + (photo.tiles.stats?.parsing || 0) > 0;
         const waited = performance.now() - groundPendingSince;

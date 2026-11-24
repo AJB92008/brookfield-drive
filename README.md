@@ -11,9 +11,20 @@ npm run dev        # then open http://localhost:5173
 
 The baked map (`public/data/brookfield.json`) is already in the project folder, so the game makes no network calls while it runs.
 
+## Photoreal mode (Google 3D city)
+
+With a Cesium ion token, the game streams **Google Photorealistic 3D Tiles** of Brookfield through Cesium's free personal tier. Press **P** to switch between the real 3D city and the classic look built from OpenStreetMap.
+
+- **What the OSM layer still does:** the OpenStreetMap data stays underneath as an invisible layer for physics, traffic, street names and the minimap.
+- **How cars follow the ground:** they raycast the real 3D surface, so hills, ramps and overpasses all work.
+- **Token setup:** the token lives in `.env.local` (`VITE_CESIUM_TOKEN=...`, ignored by git) for local dev, and in the `CESIUM_TOKEN` repo secret for GitHub Pages. Use a token limited to `assets:read`, asset 2275207, and the site's URL.
+- **Attribution:** the Google logo and the live data credits must stay on screen (Map Tiles API policy).
+- **Fallback:** without a token, or if the stream fails, the game falls back to the classic look.
+
 ## Play anywhere
 
-The game is hosted as a private claude.ai page: https://claude.ai/artifact/Hg7dYNXP3YSQG1uXwWwhsc
+- **GitHub Pages:** https://ajb92008.github.io/brookfield-drive/ includes photoreal mode. It's deployed by `.github/workflows/pages.yml` on every push to `main`.
+- **Private claude.ai page (classic look only):** https://claude.ai/artifact/Hg7dYNXP3YSQG1uXwWwhsc
 
 To update the hosted copy after changing the code, run `npm run build:artifact`. That packs the game into `artifact/index.html` plus `artifact/data/brookfield.json`. Then republish that folder (ask Claude to do it).
 
@@ -29,6 +40,7 @@ To update the hosted copy after changing the code, run `npm run build:artifact`.
 | M | City map. Click anywhere on it to teleport there |
 | R | Put the car back on the nearest road |
 | T | Turn traffic on or off |
+| P | Switch between the photoreal 3D city and the classic look |
 | H | Show or hide the controls panel |
 
 A gamepad also works: left stick steers, RT is gas, LT is brake, A/B is handbrake, Y changes camera, X resets, Back opens the map.
