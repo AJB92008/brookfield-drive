@@ -27,17 +27,40 @@
       <div id="traffic-count"></div>
 
       <div id="speedo">
-        <div class="row"><span id="speed">0</span><span class="unit">MPH</span><span id="gear">N</span></div>
+        <div class="car-name">Lexus SC 430</div>
+        <div class="row"><span id="speed">0</span><span class="unit">MPH</span><span id="gear">D</span></div>
         <div class="track"><div id="speed-bar"></div></div>
+        <div class="tach-row"><div class="tach"><div id="rpm-bar"></div><div class="redline"></div></div><span id="rpm">650</span><span class="unit">RPM</span></div>
+      </div>
+
+      <div id="spec" hidden>
+        <div class="spec-title">2002 Lexus SC 430</div>
+        <table>
+          <tr><th>Engine</th><td>4.3 L 3UZ-FE V8, DOHC 32-valve, VVT-i</td></tr>
+          <tr><th>Power</th><td>300 hp @ 5,600 rpm</td></tr>
+          <tr><th>Torque</th><td>325 lb-ft @ 3,400 rpm</td></tr>
+          <tr><th>Transmission</th><td>5-speed automatic, rear-wheel drive</td></tr>
+          <tr><th>Gear ratios*</th><td>3.357 / 2.180 / 1.424 / 1.000 / 0.753, R 3.431</td></tr>
+          <tr><th>Final drive</th><td>3.266</td></tr>
+          <tr><th>Curb weight</th><td>3,840 lb (1,742 kg)</td></tr>
+          <tr><th>0–60 mph</th><td>5.9 s</td></tr>
+          <tr><th>Top speed*</th><td>155 mph (electronically limited)</td></tr>
+          <tr><th>Drag coefficient</th><td>0.30</td></tr>
+          <tr><th>Length × width × height</th><td>177.8 × 72.0 × 53.1 in</td></tr>
+          <tr><th>Wheelbase</th><td>103.1 in</td></tr>
+          <tr><th>Tires</th><td>245/40ZR18 on 18 × 8 in alloys</td></tr>
+          <tr><th>Turning circle</th><td>35.4 ft</td></tr>
+        </table>
+        <div class="spec-note">Lexus Canada 2002 spec sheet. *Gear ratios and top speed from other published sources. Press I to close.</div>
       </div>
 
       <div id="help">
         <b>Controls</b>
         <div><kbd>W</kbd><kbd>↑</kbd> gas &nbsp; <kbd>S</kbd><kbd>↓</kbd> brake / reverse</div>
         <div><kbd>A</kbd><kbd>D</kbd><kbd>←</kbd><kbd>→</kbd> steer &nbsp; <kbd>Space</kbd> handbrake</div>
-        <div><kbd>C</kbd> camera &nbsp; <kbd>M</kbd> city map (click to teleport)</div>
+        <div><kbd>C</kbd> camera &nbsp; <kbd>V</kbd> look at the car &nbsp; <kbd>M</kbd> city map</div>
         <div><kbd>R</kbd> back on the road &nbsp; <kbd>T</kbd> traffic on/off</div>
-        <div><kbd>P</kbd> photoreal 3D city / classic</div>
+        <div><kbd>P</kbd> photoreal 3D city / classic &nbsp; <kbd>I</kbd> car specs</div>
         <div><kbd>H</kbd> hide this</div>
       </div>
 

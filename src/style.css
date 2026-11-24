@@ -28,6 +28,7 @@ kbd { display: inline-block; min-width: 1.5em; padding: 0 0.35em; margin: 0 0.1e
 #minimap { position: absolute; left: calc(18px + env(safe-area-inset-left, 0px)); bottom: calc(34px + env(safe-area-inset-bottom, 0px)); width: 210px; height: 210px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.85); box-shadow: 0 4px 18px rgba(0,0,0,0.45); }
 #traffic-count { position: absolute; left: calc(18px + env(safe-area-inset-left, 0px)); bottom: calc(12px + env(safe-area-inset-bottom, 0px)); width: 210px; text-align: center; font-size: 11px; opacity: 0.75; text-shadow: 0 1px 3px #000; }
 
+#speedo .car-name { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.7; text-align: right; margin-bottom: 2px; }
 #speedo { position: absolute; right: calc(22px + env(safe-area-inset-right, 0px)); bottom: calc(30px + env(safe-area-inset-bottom, 0px)); min-width: 190px; padding: 10px 16px 12px; border-radius: 12px; background: rgba(12,16,20,0.55); backdrop-filter: blur(4px); }
 #speedo .row { display: flex; align-items: baseline; gap: 8px; justify-content: flex-end; }
 #speed { font-size: 54px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; }
@@ -66,3 +67,14 @@ kbd { display: inline-block; min-width: 1.5em; padding: 0 0.35em; margin: 0 0.1e
 #cesium-credit { position: absolute; right: calc(10px + env(safe-area-inset-right, 0px)); bottom: calc(150px + env(safe-area-inset-bottom, 0px)); pointer-events: auto; line-height: 0; }
 #cesium-credit img { height: 20px; width: auto; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8)); }
 #imagery-credit { position: absolute; right: calc(8px + env(safe-area-inset-right, 0px)); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); font-size: 10px; opacity: 0.8; text-shadow: 0 1px 2px #000; }
+#speedo .tach-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+#speedo .tach { position: relative; flex: 1; height: 5px; border-radius: 3px; background: rgba(255,255,255,0.15); overflow: hidden; }
+#rpm-bar { height: 100%; width: 0; background: #cfe3ff; }
+#speedo .redline { position: absolute; top: 0; bottom: 0; left: 85.7%; right: 0; background: rgba(255,70,70,0.55); }
+#rpm { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 3.2em; text-align: right; }
+#spec { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(460px, 92vw); padding: 16px 18px; border-radius: 12px; background: rgba(12,16,20,0.9); font-size: 13px; pointer-events: auto; }
+#spec .spec-title { font-weight: 800; font-size: 17px; margin-bottom: 8px; }
+#spec table { width: 100%; border-collapse: collapse; }
+#spec th { text-align: left; font-weight: 600; opacity: 0.7; padding: 3px 10px 3px 0; white-space: nowrap; vertical-align: top; }
+#spec td { padding: 3px 0; font-variant-numeric: tabular-nums; }
+#spec .spec-note { margin-top: 10px; font-size: 11px; opacity: 0.65; }

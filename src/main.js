@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoadIndex, BuildingIndex } from './spatial.js';
 import { buildWorld } from './world.js';
-import { PlayerCar } from './car.js';
+import { PlayerCar } from './sc430.js';
 import { Traffic } from './traffic.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
@@ -81,7 +81,7 @@ async function main(saved = {}) {
   const traffic = new Traffic(map, scene, { maxCars: 150 });
   console.log(`[brookfield] traffic graph: ${traffic.edges.length} directed edges`);
 
-  const player = new PlayerCar(scene);
+  const player = new PlayerCar(scene, renderer);
   const env = { roads, buildings, trees: world.treePoints, traffic, bounds: map.bounds };
 
   // Put the car on the nearest real road to (x,z), in the right-hand lane, facing `prefer` if two-way.
@@ -168,8 +168,8 @@ async function main(saved = {}) {
   }
 
   // camera rig
-  const CAM_MODES = ['chase', 'far', 'hood', 'top'];
-  let camMode = Number.isInteger(saved.cam) ? saved.cam % 4 : 0;
+  const CAM_MODES = ['chase', 'far', 'hood', 'top', 'orbit'];
+  let camMode = Number.isInteger(saved.cam) ? saved.cam % CAM_MODES.length : 0;
   const camPos = new THREE.Vector3();
   const look = new THREE.Vector3();
   let shake = 0;
@@ -178,8 +178,9 @@ async function main(saved = {}) {
     const v = Math.abs(player.speed);
     switch (CAM_MODES[camMode]) {
       case 'far': return out.set(player.x - fx * 16, player.y + 7.5, player.z - fz * 16);
-      case 'hood': return out.set(player.x + fx * 0.6, player.y + 1.25, player.z + fz * 0.6); // driver's eye; car body hidden
+      case 'hood': return out.set(player.x + fx * 0.15, player.y + 1.12, player.z + fz * 0.15); // driver's eye; car body hidden
       case 'top': return out.set(player.x + 0.01, player.y + 140, player.z + 0.01);
+      case 'orbit': { const a = performance.now() / 5000; return out.set(player.x + Math.sin(a) * 6.5, player.y + 1.6, player.z + Math.cos(a) * 6.5); }
       default: { const d = 7.8 + v * 0.05; return out.set(player.x - fx * d, player.y + 2.9 + v * 0.012, player.z - fz * d); }
     }
   }
@@ -194,7 +195,7 @@ async function main(saved = {}) {
     }
     const mode = CAM_MODES[camMode];
     player.group.visible = mode !== 'hood'; // otherwise the cabin/glass boxes block the view
-    const k = mode === 'hood' ? 1 : 1 - Math.exp(-dt * (mode === 'top' ? 4 : 6));
+    const k = mode === 'hood' || mode === 'orbit' ? 1 : 1 - Math.exp(-dt * (mode === 'top' ? 4 : 6));
     camPos.lerp(tmp, k);
     camera.position.copy(camPos);
     if (shake > 0) {
@@ -206,6 +207,9 @@ async function main(saved = {}) {
     if (mode === 'top') {
       camera.up.set(fx, 0, fz);
       look.set(player.x, player.y, player.z);
+    } else if (mode === 'orbit') {
+      camera.up.set(0, 1, 0);
+      look.set(player.x, player.y + 0.7, player.z);
     } else {
       camera.up.set(0, 1, 0);
       const ahead = mode === 'hood' ? 30 : 5;
@@ -227,12 +231,14 @@ async function main(saved = {}) {
   const input = new Input();
   const helpEl = document.getElementById('help');
   input.on('KeyC', () => { camMode = (camMode + 1) % CAM_MODES.length; });
+  input.on('KeyV', () => { camMode = CAM_MODES.indexOf('orbit'); }); // showcase view of the car
   input.on('KeyM', () => hud.toggleBig());
   input.on('Escape', () => hud.toggleBig(false));
   input.on('KeyR', () => { placeOnRoad(player.x, player.z, player.heading); afterMove(); });
   input.on('KeyP', () => applyMode(mode === 'photo' ? 'classic' : 'photo'));
   input.on('KeyT', () => { traffic.enabled = !traffic.enabled; if (!traffic.enabled) traffic.clear(); traffic._seeded = false; });
   input.on('KeyH', () => helpEl.classList.toggle('hidden'));
+  input.on('KeyI', () => { const el = document.getElementById('spec'); el.hidden = !el.hidden; });
   setTimeout(() => helpEl.classList.add('hidden'), 20000);
 
   addEventListener('resize', () => {
@@ -268,12 +274,15 @@ async function main(saved = {}) {
   }
 
   let last = performance.now();
+  let physAcc = 0;
+  const PHYS_DT = 1 / 120; // fixed physics step: the car moves in real time even if frames are slow
   let fpsAcc = 0, fpsFrames = 0;
   const stats = { fps: 0 };
   let attrTimer = 0;
   let lodTimer = 0;
   function frame(now) {
-    const dt = Math.min(0.05, (now - last) / 1000);
+    const realDt = Math.min(0.25, (now - last) / 1000); // cap only for long stalls (tab switches)
+    const dt = Math.min(0.05, realDt); // for camera/HUD smoothing
     last = now;
     input.poll();
     if (photo && mode === 'photo') {
@@ -296,11 +305,16 @@ async function main(saved = {}) {
     const frozen = mode === 'photo' && player.groundPending;
     hud.setLoading(frozen ? 'Loading the 3D city around you…' : '');
     if (!frozen) {
-      const SUB = 3;
-      for (let i = 0; i < SUB; i++) player.update(dt / SUB, input, env);
-      player.updateVertical(dt, env);
-      if (player.impact > 4) shake = Math.min(1.2, player.impact * 0.08);
-      traffic.update(dt, player, now / 1000);
+      physAcc += realDt;
+      let impact = 0;
+      while (physAcc >= PHYS_DT) {
+        player.update(PHYS_DT, input, env);
+        impact = Math.max(impact, player.impact);
+        physAcc -= PHYS_DT;
+      }
+      player.updateVertical(realDt, env);
+      if (impact > 4) shake = Math.min(1.2, impact * 0.08);
+      traffic.update(realDt, player, now / 1000);
     }
     if (mode === 'classic') {
       if (aerial) aerial.update(player.x, player.z);

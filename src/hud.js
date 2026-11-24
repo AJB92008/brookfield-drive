@@ -175,10 +175,15 @@ export class Hud {
   }
 
   update(dt, player, traffic) {
-    const mph = Math.abs(player.speed) * 2.23694;
+    // true speed over the ground (m/s -> mph), including any sideways slide
+    const mph = (player.groundSpeed ?? Math.abs(player.speed)) * 2.23694;
     this.speedEl.textContent = Math.round(mph);
-    this.speedBar.style.width = `${Math.min(100, (mph / 130) * 100)}%`;
-    this.$('gear').textContent = player.speed < -0.3 ? 'R' : mph < 1 ? 'N' : 'D';
+    this.speedBar.style.width = `${Math.min(100, (mph / 155) * 100)}%`;
+    this.$('gear').textContent = player.gearLabel ?? 'D';
+    if (player.rpm !== undefined) {
+      this.$('rpm-bar').style.width = `${Math.min(100, (player.rpm / 7000) * 100)}%`;
+      this.$('rpm').textContent = Math.round(player.rpm / 50) * 50;
+    }
 
     this.streetTimer -= dt;
     if (this.streetTimer <= 0) {
