@@ -8,6 +8,20 @@ import { mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { toLon, toLat, toX, toZ, HALF_W, HALF_H, M_PER_DEG_LAT, M_PER_DEG_LON } from './geo.mjs';
+import jpeg from 'jpeg-js';
+
+// The server occasionally returns a tile with a solid magenta block (a rendering glitch). Real
+// scenery almost never has red and blue both far above green, so treat that as corrupt and retry.
+function magentaFraction(buf) {
+  const { width: W, height: H, data } = jpeg.decode(buf, { useTArray: true, formatAsRGBA: false });
+  let mag = 0, total = 0;
+  for (let y = 0; y < H; y += 2) for (let x = 0; x < W; x += 2) {
+    const i = (y * W + x) * 3, r = data[i], g = data[i + 1], b = data[i + 2];
+    total++;
+    if (r > g * 1.6 + 10 && b > g * 1.35 + 10) mag++;
+  }
+  return mag / total;
+}
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(ROOT, 'public', 'aerial');
@@ -32,6 +46,7 @@ async function exportImage({ west, south, east, north, w, h, bands, quality = 80
       if (!img.ok) throw new Error(`image HTTP ${img.status}`);
       const buf = Buffer.from(await img.arrayBuffer());
       if (buf[0] !== 0xff || buf[1] !== 0xd8) throw new Error('not a JPEG');
+      if (bands === '0,1,2' && magentaFraction(buf) > 0.002) throw new Error('corrupt tile (magenta block)');
       return { buf, extent: meta.extent, width: meta.width, height: meta.height };
     } catch (err) {
       console.log(`    retry ${attempt + 1}: ${err.message}`);

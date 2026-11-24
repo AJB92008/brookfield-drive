@@ -101,6 +101,7 @@ export async function analyzeAerial({ root, map, log = console.log, debugTile = 
           const mx = Math.floor((x - ext.minX) / pxW), mz = Math.floor((z - ext.minZ) / pxH);
           if (mx >= 0 && mz >= 0 && mx < W && mz < H && mask[mz * W + mx]) continue; // tree over roof
           if (!sRGB(x, z, c)) continue;
+          if (c[0] > c[1] * 1.6 + 10 && c[2] > c[1] * 1.35 + 10) continue; // imagery glitch, not a roof color
           sumR[bi] += c[0]; sumG[bi] += c[1]; sumB[bi] += c[2]; cnt[bi]++;
         }
       }
