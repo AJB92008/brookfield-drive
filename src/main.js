@@ -14,7 +14,7 @@ const statusEl = loadingEl.querySelector('.status');
 const fillEl = loadingEl.querySelector('.fill');
 const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
 let step = 0;
-const STEPS = 9;
+const STEPS = 10;
 async function status(text) {
   statusEl.textContent = text;
   fillEl.style.width = `${Math.round((++step / STEPS) * 100)}%`;
@@ -297,12 +297,13 @@ async function main(saved = {}) {
       for (let i = 0; i < SUB; i++) player.update(dt / SUB, input, env);
       player.updateVertical(dt, env);
       if (player.impact > 4) shake = Math.min(1.2, player.impact * 0.08);
-      traffic.update(dt, player);
+      traffic.update(dt, player, now / 1000);
     }
     if (mode === 'classic') {
       if (aerial) aerial.update(player.x, player.z);
       lodTimer -= dt;
       if (lodTimer <= 0) { lodTimer = 0.5; world.updateLod(player.x, player.z); }
+      world.furniture?.updateSignals(now / 1000);
     }
     updateCamera(dt);
     updateSun();

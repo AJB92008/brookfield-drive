@@ -209,8 +209,10 @@ function box(g, cx, cz, w, d, y0, y1, rot, layer, col) {
 }
 
 // ---------- per-building style ----------
-function styleOf(b, r, area) {
-  switch (b.k) {
+function styleOf(b, r, area, commercial) {
+  // big boxes with mapped businesses are stores, not warehouses
+  const k = commercial && b.k === 'i' ? 'c' : b.k;
+  switch (k) {
     case 'h': { const m = r < 0.62 ? 'siding' : r < 0.86 ? 'brick' : 'stucco'; return { kind: 'house', mat: m, paint: pick(PAINT[m], hash01(r * 1e6)), floorH: 2.9, roof: 'pitched' }; }
     case 'g': return { kind: 'garage', mat: 'siding', paint: pick(PAINT.siding, r), floorH: 2.7, roof: 'pitched' };
     case 'a': { const m = r < 0.5 ? 'brick' : 'siding'; return { kind: 'apartment', mat: m, paint: pick(PAINT[m], hash01(r * 7e5)), floorH: 3.0, roof: area < 1800 ? 'pitched' : 'flat' }; }
@@ -224,7 +226,7 @@ function styleOf(b, r, area) {
   }
 }
 
-export function buildBuildings(map, bindex, roadIndex, group) {
+export function buildBuildings(map, bindex, roadIndex, group, commercialSet = new Set()) {
   const tex = makeFacadeTexture();
   const material = makeBuildingMaterial(tex);
   const tiles = new Map();
@@ -247,7 +249,7 @@ export function buildBuildings(map, bindex, roadIndex, group) {
     const g = geoAt(cx, cz);
     const r1 = hash01(bi), r2 = hash01(bi + 777777), r3 = hash01(bi + 31337);
     const area = Math.abs(ringArea(p));
-    const st = styleOf(b, r1, area);
+    const st = styleOf(b, r1, area, commercialSet.has(bi));
     const h = b.h;
     const flat = st.roof === 'flat';
     const parapet = flat ? (st.kind === 'office' ? 1.2 : 0.9) : 0;

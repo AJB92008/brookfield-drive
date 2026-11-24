@@ -6,6 +6,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BBOX, LAT0, LON0, M_PER_DEG_LAT, M_PER_DEG_LON, toX, toZ } from './geo.mjs';
 import { analyzeAerial } from './aerial-analysis.mjs';
+import { computeFurniture } from './street-furniture.mjs';
 import { access } from 'node:fs/promises';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -170,6 +171,8 @@ function buildingInfo(el, area) {
 const [roadsRaw, buildingsRaw, areasRaw, boundsRaw] = await Promise.all(
   ['roads', 'buildings', 'areas', 'boundaries'].map(readRaw),
 );
+const readOptional = async (n) => { try { return await readRaw(n); } catch { return { elements: [] }; } };
+const [poisRaw, lampsRaw, footwaysRaw] = await Promise.all(['pois', 'lamps', 'footways'].map(readOptional));
 
 // Nodes
 const osmNode = new Map();
@@ -333,6 +336,28 @@ function findSpawn() {
 }
 const spawn = findSpawn();
 
+// Street furniture (signals, stop signs, crosswalks, streetlights, street-name signs, sidewalks)
+const nodeTags = new Map();
+for (const [id, idx] of nodeIndex) {
+  const t = osmNode.get(id)?.tags;
+  if (t && (t.highway || t.crossing)) nodeTags.set(idx, t);
+}
+const lamps = lampsRaw.elements.filter((e) => e.type === 'node').map((e) => ({ x: projX(e.lon), z: projZ(e.lat) }));
+const sidewalks = footwaysRaw.elements.filter((e) => e.geometry).map((e) => ringFromLatLon(e.geometry)).filter((p) => p.length >= 4);
+const furniture = computeFurniture({ nodes, roads, nodeTags, lamps, sidewalks });
+
+// Named businesses / places for storefront signs
+const POI_KEYS = ['shop', 'amenity', 'office', 'leisure', 'tourism', 'healthcare'];
+const pois = [];
+for (const e of poisRaw.elements) {
+  const t = e.tags || {};
+  const lat = e.lat ?? e.center?.lat, lon = e.lon ?? e.center?.lon;
+  if (!t.name || lat === undefined) continue;
+  if (/^(parking|bench|waste_basket|bicycle_parking|toilets|post_box|atm|vending_machine|fire_hydrant|shelter|parking_entrance|charging_station|drinking_water)$/.test(t.amenity || '')) continue;
+  const key = POI_KEYS.find((k) => t[k]);
+  pois.push({ n: t.name, k: `${key}:${t[key]}`, x: projX(lon), z: projZ(lat), w: e.type === 'node' ? 0 : 1 });
+}
+
 // Aerial photo analysis (roof colors + real tree positions), if the NAIP tiles have been fetched.
 let trees = null;
 try {
@@ -361,6 +386,8 @@ const map = {
   places,
 };
 if (trees) map.trees = trees;
+map.furniture = furniture;
+map.pois = pois;
 
 await mkdir(dirname(OUT), { recursive: true });
 const json = JSON.stringify(map);
@@ -373,3 +400,5 @@ console.log('  roads by type:', stats.roadsByType);
 console.log(`  buildings: ${buildings.length} (skipped ${skippedBuildings})`);
 console.log(`  areas: ${areas.length}, places: ${places.map((p) => `${p.n}(${p.rings.length})`).join(', ')}`);
 console.log('  spawn:', spawn);
+console.log(`  furniture: ${furniture.signals.length} signalized intersections (${furniture.signals.reduce((a, s) => a + s.p.length, 0)} poles), ${furniture.stops.length / 4} stop signs, ${furniture.crosswalks.length / 5} crosswalks, ${furniture.lights.length / 4} streetlights, ${furniture.streetSigns.length / 6} street-name signs (${furniture.streetNames.length} names), ${furniture.sidewalks.length} sidewalks`);
+console.log(`  pois: ${pois.length} named places`);

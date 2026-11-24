@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { carGeometries, blobTexture } from './car.js';
 import { Grid } from './spatial.js';
+import { phaseState, signalOffset } from './furniture.js';
 
 const CLASS_WEIGHT = {
   motorway: 3.5, trunk: 3, primary: 3, secondary: 2.5, tertiary: 2,
@@ -68,13 +69,13 @@ export class Traffic {
       });
     });
     const vertexOf = new Map();
-    const vx = [], vz = [];
+    const vx = [], vz = [], vnode = [];
     const vid = (n) => {
       let v = vertexOf.get(n);
       if (v === undefined) {
         v = vx.length;
         vertexOf.set(n, v);
-        vx.push(nodes[n * 2]); vz.push(nodes[n * 2 + 1]);
+        vx.push(nodes[n * 2]); vz.push(nodes[n * 2 + 1]); vnode.push(n);
       }
       return v;
     };
@@ -99,12 +100,14 @@ export class Traffic {
       (out[from] ||= []).push(e);
       return e;
     };
+    // signal stop-line nodes become vertices too, so an edge ends exactly where cars must stop
+    const sigNodes = new Set((this.map.furniture?.signals || []).flatMap((s) => s.nodes));
     roads.forEach((r, ri) => {
       if (!drivable(r)) return;
       let start = 0;
       for (let k = 1; k < r.nd.length; k++) {
         const n = r.nd[k];
-        if (k < r.nd.length - 1 && (use.get(n) || 0) < 2) continue;
+        if (k < r.nd.length - 1 && (use.get(n) || 0) < 2 && !sigNodes.has(n)) continue;
         const slice = r.nd.slice(start, k + 1);
         const pts = [];
         slice.forEach((m) => pts.push(nodes[m * 2], nodes[m * 2 + 1]));
@@ -124,6 +127,24 @@ export class Traffic {
     this.edges = edges;
     this.out = out;
     this.vx = vx; this.vz = vz;
+    // Traffic signals: an edge that enters a signalized intersection from outside stops at its end on red.
+    const sigs = this.map.furniture?.signals || [];
+    const clusterOf = new Map();
+    sigs.forEach((s, si) => s.nodes.forEach((n) => clusterOf.set(n, si)));
+    let signalEdges = 0;
+    for (const e of edges) {
+      const si = clusterOf.get(vnode[e.to]);
+      if (si === undefined || clusterOf.get(vnode[e.from]) === si) continue;
+      const [dx, dz] = this.endDir(e);
+      // the pole whose arm we're arriving on (arm points away from the center, we travel toward it)
+      let best = null, bestDot = -2;
+      for (const p of sigs[si].p) { const d = -(p[2] * dx + p[3] * dz); if (d > bestDot) { bestDot = d; best = p; } }
+      e.signal = { si, phase: best ? best[8] : 0 };
+      signalEdges++;
+    }
+    this.signalEdges = signalEdges;
+    this.vnode = vnode; this.vertexOf = vertexOf; this.clusterOf = clusterOf;
+    this.obeySignals = true;
     // spawn grid of edges by midpoint
     this.edgeGrid = new Grid(200);
     for (const e of edges) {
@@ -269,7 +290,7 @@ export class Traffic {
     for (const c of this.cars) { c.yKnown = !groundInit; if (!groundInit) c.y = c.ty = 0; }
   }
 
-  update(dt, player) {
+  update(dt, player, time = performance.now() / 1000) {
     if (!this.enabled) {
       this.bodyMesh.count = this.detailMesh.count = this.blobMesh.count = 0;
       return;
@@ -296,6 +317,15 @@ export class Traffic {
       if (sharp > 0.3) {
         const turnSpeed = sharp > 1.5 ? 4 : sharp > 0.8 ? 6.5 : 10;
         if (rest < 40) target = Math.min(target, turnSpeed + rest * 0.35);
+      }
+      // traffic signals: stop on red, and on yellow if there's room to stop comfortably
+      if (this.obeySignals && e.signal) {
+        const st = phaseState(e.signal.phase, time + signalOffset(e.signal.si));
+        if (st !== 2) {
+          const stopDist = rest - 2.5;
+          const canStop = stopDist > (car.speed * car.speed) / (2 * 5) + 1;
+          if (st === 0 ? stopDist > -1 : canStop) target = Math.min(target, stopDist < 0.4 ? 0 : Math.sqrt(2 * 4.5 * stopDist));
+        }
       }
       // follow the car ahead
       const gap = this.gapAhead(car);

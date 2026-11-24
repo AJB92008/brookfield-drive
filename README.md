@@ -45,11 +45,23 @@ To update the hosted copy after changing the code, run `npm run build:artifact`.
 
 A gamepad also works: left stick steers, RT is gas, LT is brake, A/B is handbrake, Y changes camera, X resets, Back opens the map.
 
+## Classic look: what it's made of
+
+The classic look uses only free, open data:
+
+- **Ground:** real aerial photos at 0.5 m per pixel (USDA NAIP via USGS, public domain), streamed in 500 m tiles around the car.
+- **Roofs and trees:** roof colors come from the photos. Trees are placed where the infrared band shows tree canopy, about 147k of them.
+- **Buildings:** OpenStreetMap footprints with procedural facades: siding, brick and stucco with windows, garage and front doors facing the street, storefronts, office glass and warehouse docks. Roofs are gable or hip on houses, and flat with parapets and rooftop units on commercial buildings.
+- **Street furniture:** traffic signals cycle and AI traffic obeys them. Also stop signs, painted crosswalks, sidewalks, streetlights, green street-name signs, and business-name signs from OSM shops, restaurants and offices.
+
+The facade textures and roof shapes are generic patterns, not copies of real buildings. Nothing is derived from Google's 3D tiles, whose terms forbid it.
+
 ## Refresh the map data
 
 ```bash
 npm run fetch-map -- --force   # downloads raw OSM data from Overpass into data-raw/
-npm run build-map              # bakes it into public/data/brookfield.json
+npm run fetch-aerial           # downloads NAIP aerial tiles to public/aerial/ (+ infrared copies in data-raw/)
+npm run build-map              # bakes everything into public/data/brookfield.json
 ```
 
 - **Fetch step:** `scripts/fetch-osm.mjs` tries several Overpass mirrors with retries, because the public servers are often overloaded.
@@ -70,7 +82,6 @@ npm run build-map              # bakes it into public/data/brookfield.json
 ## Ideas for next steps
 
 - **Bridges and overpasses.** The world is flat for now, so I-94's overpasses cross at grade. OSM `bridge`/`layer` tags are already kept in the data (`road.b`).
-- **Traffic lights and stop signs.** OSM `highway=traffic_signals` nodes would need to be fetched.
 - **Missions.** Checkpoint races or delivery runs between real places, such as Brookfield Square or the Brookfield East/Central high schools.
 
 Map data © OpenStreetMap contributors, licensed under the ODbL. The in-game attribution must stay visible.

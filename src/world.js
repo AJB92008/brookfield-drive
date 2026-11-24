@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import { makeDetailTexture } from './textures.js';
 import { Grid, pointInRing, PointIndex } from './spatial.js';
 import { buildBuildings as buildDetailedBuildings } from './buildings.js';
+import { buildFurniture } from './furniture.js';
+import { buildSigns, assignPois } from './signs.js';
 
 const TILE = 500; // meters; static geometry is merged per tile so frustum culling works
 
@@ -639,8 +641,13 @@ export async function buildWorld(map, roadIndex, bindex, scene, progress = async
   const areas = buildAreas(map, group, mats);
   stats.areaTris = areas.tris; stats.areaFailed = areas.failed;
   await progress('Raising buildings…');
-  const blds = buildDetailedBuildings(map, bindex, roadIndex, group);
+  const poiBuildings = assignPois(map, bindex);
+  const blds = buildDetailedBuildings(map, bindex, roadIndex, group, new Set(poiBuildings.keys()));
   stats.buildingTris = blds.tris; stats.buildingFailed = blds.failed; stats.roofs = blds.roofs;
+  stats.signs = buildSigns(map, bindex, blds.fronts, group, poiBuildings);
+  await progress('Putting up signals & signs…');
+  const furniture = buildFurniture(map, group);
+  stats.furniture = furniture?.stats;
   await progress('Growing trees…');
   const trees = buildTrees(map, roadIndex, bindex, group, mats, b);
   stats.trees = trees.count; stats.forestTrees = trees.forestCount; stats.yardTrees = trees.yardCount;
@@ -648,5 +655,5 @@ export async function buildWorld(map, roadIndex, bindex, scene, progress = async
   // Trunks are invisible at a distance; skip drawing them beyond ~700 m.
   const trunkMeshes = group.children.filter((m) => m.userData?.trunk);
   const updateLod = (x, z) => { for (const m of trunkMeshes) m.visible = Math.hypot(m.userData.cx - x, m.userData.cz - z) < 700; };
-  return { group, stats, treePoints: trees.points, fronts: blds.fronts, updateLod };
+  return { group, stats, treePoints: trees.points, fronts: blds.fronts, updateLod, furniture };
 }

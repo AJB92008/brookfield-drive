@@ -33,10 +33,30 @@ const QUERIES = {
 );
 out body;
 >;
-out skel qt;`,
+out body qt;`,
 
   buildings: `[out:json][timeout:180][bbox:${B}];
 way["building"];
+out tags geom;`,
+
+  // Named businesses/places (for storefront signs), street lamps, sidewalks.
+  pois: `[out:json][timeout:180][bbox:${B}];
+(
+  nwr["name"]["shop"];
+  nwr["name"]["amenity"];
+  nwr["name"]["office"];
+  nwr["name"]["leisure"~"^(fitness_centre|sports_centre|bowling_alley|ice_rink)$"];
+  nwr["name"]["tourism"~"^(hotel|motel)$"];
+  nwr["name"]["healthcare"];
+);
+out center tags;`,
+
+  lamps: `[out:json][timeout:120][bbox:${B}];
+node["highway"="street_lamp"];
+out;`,
+
+  footways: `[out:json][timeout:180][bbox:${B}];
+way["highway"="footway"]["footway"="sidewalk"];
 out tags geom;`,
 
   // No global [bbox] here: it would clip relation member geometry and break ring stitching.
@@ -104,10 +124,13 @@ async function exists(p) {
 }
 
 const force = process.argv.includes('--force');
+// --only=roads,pois refetches just those queries (ignores the cache for them)
+const only = process.argv.find((a) => a.startsWith('--only='))?.slice(7).split(',') ?? null;
 await mkdir(RAW, { recursive: true });
 for (const [name, query] of Object.entries(QUERIES)) {
   const out = join(RAW, `${name}.json`);
-  if (!force && (await exists(out))) {
+  if (only && !only.includes(name)) continue;
+  if (!force && !only && (await exists(out))) {
     console.log(`${name}: cached (use --force to refetch)`);
     continue;
   }
