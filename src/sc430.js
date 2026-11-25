@@ -419,13 +419,19 @@ export class PlayerCar {
     if (input.handbrake) brakeForce = Math.max(brakeForce, mu * m * G * 0.45);
     const aero = 0.5 * RHO * SC430.cd * FRONTAL_AREA * vf * vf;
     const rolling = CRR * m * G * (this.offRoad ? 4 : 1);
-    let resist = aero + rolling + brakeForce;
+    // automatic in gear with no throttle: torque-converter creep holds the car on gentle slopes (~7%)
+    // when nearly stopped; steeper hills still roll it back
+    const creepHold = this.gear !== 0 && !throttle ? m * G * 0.07 * Math.max(0, 1 - Math.abs(vf) / 2) : 0;
+    let resist = aero + rolling + brakeForce + creepHold;
     let a = driveForce / m;
+    // gravity along the slope: slopePitch > 0 means the nose points downhill
+    a += G * Math.sin(this.slopePitch || 0);
     // resistances always oppose motion and can't reverse it
+    const slopeForce = m * G * Math.sin(this.slopePitch || 0);
     if (Math.abs(vf) > 1e-3) a -= Math.sign(vf) * (resist / m);
-    else if (Math.abs(driveForce) < resist) a = 0;
+    else if (Math.abs(driveForce + slopeForce) < resist) a = 0; // parked on a slope: brakes/friction hold it
     const newVf = vf + a * dt;
-    if (Math.abs(vf) > 1e-3 && Math.sign(newVf) !== Math.sign(vf) && Math.abs(driveForce) < resist) vf = 0;
+    if (Math.abs(vf) > 1e-3 && Math.sign(newVf) !== Math.sign(vf) && Math.abs(driveForce + slopeForce) < resist) vf = 0;
     else vf = newVf;
     this.accel = a;
 

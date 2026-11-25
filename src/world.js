@@ -4,13 +4,13 @@ import { makeDetailTexture, makeAsphaltTexture } from './textures.js';
 import { Grid, pointInRing, PointIndex } from './spatial.js';
 import { buildBuildings as buildDetailedBuildings } from './buildings.js';
 import { buildFurniture } from './furniture.js';
-import { T } from './terrain.js';
+import { T, Troad, ROAD_STATION, isMinorRoad } from './terrain.js';
 import { buildSigns, assignPois } from './signs.js';
 
 const TILE = 500; // meters; static geometry is merged per tile so frustum culling works
 // Ground overlays (roads, paint, sidewalks) sit this much above the terrain so the photo mesh, which
 // interpolates the same elevation slightly differently between grid points, never pokes through.
-export const GROUND_LIFT = 0.12;
+export const GROUND_LIFT = 0.15;
 
 export const LAYER_Y = {
   farm: 0.01, reserve: 0.015, park: 0.02, golf: 0.02, forest: 0.025, wetland: 0.025,
@@ -97,7 +97,7 @@ class Geo {
     for (let k = 0; k < segs; k++) {
       const a0 = (k / segs) * Math.PI * 2, a1 = ((k + 1) / segs) * Math.PI * 2;
       const x1 = cx + Math.cos(a0) * r, z1 = cz + Math.sin(a0) * r, x2 = cx + Math.cos(a1) * r, z2 = cz + Math.sin(a1) * r;
-      if (deckH === null) this.flat(cx, cz, x1, z1, x2, z2, y, c);
+      if (deckH === null) { const h = Troad(cx, cz) + y + GROUND_LIFT; this.flatH(cx, cz, h, x1, z1, h, x2, z2, h, c); } // level disc
       else this.flatH(cx, cz, deckH + y, x1, z1, deckH + y, x2, z2, deckH + y, c);
     }
   }
@@ -145,7 +145,7 @@ class Tiles {
 
 // ---------- polyline helpers ----------
 // Precomputes per-vertex miter vectors and arc lengths for a road's centerline.
-const MAX_SEG = 8; // m: long segments are split so road surfaces follow hills
+const MAX_SEG = ROAD_STATION; // m: long segments are split so road surfaces follow hills
 function polyline(rawPts, rawDeck = null) {
   const pts = [], deckArr = rawDeck ? [] : null;
   for (let i = 0; i < rawPts.length / 2; i++) {
@@ -213,7 +213,8 @@ function pointAt(pl, s, off) {
 }
 
 const PARAPET = [0.62, 0.62, 0.6];
-function ribbon(tiles, pl, hw, y, c, walls = null) {
+const SKIRT = [0.6, 0.6, 0.58]; // concrete retaining edge (matches the bridge fascias)
+function ribbon(tiles, pl, hw, y, c, walls = null, heightFn = Troad) {
   const { pts, n, mx, mz, deck } = pl;
   for (let i = 0; i < n - 1; i++) {
     const ax = pts[i * 2], az = pts[i * 2 + 1], bx = pts[i * 2 + 2], bz = pts[i * 2 + 3];
@@ -221,8 +222,23 @@ function ribbon(tiles, pl, hw, y, c, walls = null) {
     const rax = ax + mx[i] * hw, raz = az + mz[i] * hw, lax = ax - mx[i] * hw, laz = az - mz[i] * hw;
     const rbx = bx + mx[i + 1] * hw, rbz = bz + mz[i + 1] * hw, lbx = bx - mx[i + 1] * hw, lbz = bz - mz[i + 1] * hw;
     if (!deck) {
-      g.flat(rax, raz, lax, laz, lbx, lbz, y, c);
-      g.flat(rax, raz, lbx, lbz, rbx, rbz, y, c);
+      // level across the width at the original ground height of the centerline; the drawn ground is cut
+      // down around roads (terrain.js carveRoadBeds) so it never pokes through
+      const ha = heightFn(ax, az) + y + GROUND_LIFT, hb = heightFn(bx, bz) + y + GROUND_LIFT;
+      g.flatH(rax, raz, ha, lax, laz, ha, lbx, lbz, hb, c);
+      g.flatH(rax, raz, ha, lbx, lbz, hb, rbx, rbz, hb, c);
+      if (walls) {
+        // where the ground falls away below an edge (road on a side slope / embankment), drop a concrete
+        // skirt so the road doesn't look like it's floating
+        for (const [x0, z0, x1, z1, sgn] of [[rax, raz, rbx, rbz, 1], [lax, laz, lbx, lbz, -1]]) {
+          const g0 = T(x0, z0), g1 = T(x1, z1);
+          if (ha - g0 < 0.5 && hb - g1 < 0.5) continue;
+          const w = walls.at((ax + bx) / 2, (az + bz) / 2);
+          const nx = mx[i] * sgn, nz = mz[i] * sgn;
+          w.tri([x0, g0 - 0.3, z0], [x1, g1 - 0.3, z1], [x1, hb - 0.02, z1], SKIRT, nx, 0, nz);
+          w.tri([x0, g0 - 0.3, z0], [x1, hb - 0.02, z1], [x0, ha - 0.02, z0], SKIRT, nx, 0, nz);
+        }
+      }
     } else {
       const ha = deck[i] + y, hb = deck[i + 1] + y;
       g.flatH(rax, raz, ha, lax, laz, ha, lbx, lbz, hb, c);
@@ -278,8 +294,11 @@ function paintLine(tiles, pl, off, width, color, y, { dash = 0, gap = 0, excl = 
       const nx = -pl.sz[i] * hw, nz = pl.sx[i] * hw;
       const g = tiles.at(x0, z0);
       if (!pl.deck) {
-        g.flat(x0 + nx, z0 + nz, x0 - nx, z0 - nz, x1 - nx, z1 - nz, y, color);
-        g.flat(x0 + nx, z0 + nz, x1 - nx, z1 - nz, x1 + nx, z1 + nz, y, color);
+        // paint sits on the level road surface: use the centerline height at each end
+        const [cx0, cz0] = pointAt(pl, s + 0.001, 0), [cx1, cz1] = pointAt(pl, segEnd - 0.001, 0);
+        const h0 = Troad(cx0, cz0) + y + GROUND_LIFT, h1 = Troad(cx1, cz1) + y + GROUND_LIFT;
+        g.flatH(x0 + nx, z0 + nz, h0, x0 - nx, z0 - nz, h0, x1 - nx, z1 - nz, h1, color);
+        g.flatH(x0 + nx, z0 + nz, h0, x1 - nx, z1 - nz, h1, x1 + nx, z1 + nz, h1, color);
       } else {
         const h0 = deckAt(pl, i, t0) + y, h1 = deckAt(pl, i, t1) + y;
         g.flatH(x0 + nx, z0 + nz, h0, x0 - nx, z0 - nz, h0, x1 - nx, z1 - nz, h1, color);
@@ -353,7 +372,7 @@ function buildRoads(map, group, mats) {
   // Parking aisles and driveways go in their own meshes: the aerial photo already shows them,
   // so they can be hidden when it's loaded (they stay in the road index for physics).
   const minor = new Tiles();
-  const isMinor = (r) => r.t === 'service' && (r.sv === 'parking_aisle' || r.sv === 'driveway');
+  const isMinor = isMinorRoad;
   roads.forEach((r, ri) => ribbon(isMinor(r) ? minor : surface, polys[ri], r.w / 2, LAYER_Y.road, null, walls));
 
   // Junction / end-cap discs
@@ -404,7 +423,7 @@ function buildRails(map, group, mats) {
     const pts = [];
     nd.forEach((n) => pts.push(nodes[n * 2], nodes[n * 2 + 1]));
     const pl = polyline(pts);
-    ribbon(t, pl, 1.7, LAYER_Y.railBed, bed);
+    ribbon(t, pl, 1.7, LAYER_Y.railBed, bed, null, T); // rail beds sit on the drawn ground
     paintLine(t, pl, 0, 2.5, ties, LAYER_Y.railBed + 0.02, { dash: 0.25, gap: 0.45 });
     paintLine(t, pl, -0.72, 0.1, steel, LAYER_Y.rail);
     paintLine(t, pl, 0.72, 0.1, steel, LAYER_Y.rail);
@@ -675,7 +694,7 @@ export async function buildWorld(map, roadIndex, bindex, scene, progress = async
     building: new THREE.MeshLambertMaterial({ vertexColors: true }),
     trunk: new THREE.MeshLambertMaterial({ color: 0x5a4130 }),
     leaf: new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true }),
-    ground: new THREE.MeshLambertMaterial({ color: 0x6f9a50, map: detail }),
+    ground: new THREE.MeshLambertMaterial({ color: 0x78aa54 }), // same lawn green as the stylized ground
   };
 
   const b = map.bounds;
@@ -686,7 +705,7 @@ export async function buildWorld(map, roadIndex, bindex, scene, progress = async
   const guv = groundGeo.attributes.uv;
   for (let i = 0; i < gpos.count; i++) {
     guv.setXY(i, gpos.getX(i) / 11, gpos.getZ(i) / 11);
-    gpos.setY(i, T(gpos.getX(i), gpos.getZ(i)) - 0.6); // fallback ground follows the terrain, under the photo
+    gpos.setY(i, T(gpos.getX(i), gpos.getZ(i)) - 4); // fallback ground (outside the map), far below the real ground
   }
   groundGeo.computeVertexNormals();
   const ground = new THREE.Mesh(groundGeo, mats.ground);

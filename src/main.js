@@ -78,8 +78,9 @@ async function main(saved = {}) {
     aerial = new AerialGround({ group: world.group, renderer });
     await aerial.load();
     for (const m of world.group.children) if (m.name === 'areas' || m.name === 'roads-minor') m.visible = false;
+    roads.minorAsGround = true; // driveways/parking aisles aren't drawn, so the car drives on the ground there
     const ground = world.group.getObjectByName('ground');
-    if (ground) ground.position.y = -0.08; // overview photo sits above the grass fallback
+
     document.getElementById('imagery-credit').hidden = false;
   } catch (err) {
     console.warn('[brookfield] aerial imagery unavailable, using drawn ground', err?.message || err);

@@ -8,6 +8,7 @@ import { BBOX, LAT0, LON0, M_PER_DEG_LAT, M_PER_DEG_LON, toX, toZ } from './geo.
 import { analyzeAerial } from './aerial-analysis.mjs';
 import { computeFurniture } from './street-furniture.mjs';
 import { buildTerrain } from './terrain-build.mjs';
+import { stylizeGround } from './stylize-ground.mjs';
 import { access } from 'node:fs/promises';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -362,7 +363,7 @@ for (const e of poisRaw.elements) {
 // Aerial photo analysis (roof colors + real tree positions), if the NAIP tiles have been fetched.
 let trees = null;
 try {
-  await access(join(ROOT, 'public', 'aerial', 'manifest.json'));
+  await access(join(ROOT, 'data-raw', 'aerial-rgb', 'manifest.json'));
   const debugTile = process.argv.find((a) => a.startsWith('--debug-tile='))?.split('=')[1] ?? null;
   console.log('Analyzing aerial imagery…');
   ({ trees } = await analyzeAerial({ root: ROOT, map: { nodes, roads, buildings }, debugTile }));
@@ -406,6 +407,17 @@ const json = JSON.stringify(map);
 await writeFile(OUT, json);
 
 console.log('Map built ->', OUT);
+// Stylized ground tiles for classic mode (from the aerial photos + OSM), unless skipped.
+if (!process.argv.includes('--skip-ground')) {
+  try {
+    const am = JSON.parse(await readFile(join(ROOT, 'data-raw', 'aerial-rgb', 'manifest.json'), 'utf8'));
+    console.log('Stylizing ground tiles…');
+    await stylizeGround({ root: ROOT, rgbDir: join(ROOT, 'data-raw', 'aerial-rgb'), nirDir: join(ROOT, 'data-raw', 'aerial-nir'), aerialManifest: am, map });
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    console.log('No aerial imagery - skipping stylized ground');
+  }
+}
 console.log(`  size: ${(json.length / 1e6).toFixed(2)} MB, extent ${(halfW * 2 / 1000).toFixed(1)} x ${(halfH * 2 / 1000).toFixed(1)} km`);
 console.log(`  nodes: ${nodes.length / 2}, roads: ${roads.length}, rails: ${rails.length}`);
 console.log('  roads by type:', stats.roadsByType);

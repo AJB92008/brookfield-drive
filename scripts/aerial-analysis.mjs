@@ -33,7 +33,7 @@ function sampler(img, ext) {
 }
 
 export async function analyzeAerial({ root, map, log = console.log, debugTile = null }) {
-  const manifest = JSON.parse(await readFile(join(root, 'public', 'aerial', 'manifest.json'), 'utf8'));
+  const manifest = JSON.parse(await readFile(join(root, 'data-raw', 'aerial-rgb', 'manifest.json'), 'utf8'));
   const roads = new RoadIndex(map);
   const bindex = new BuildingIndex(map);
   const nb = map.buildings.length;
@@ -49,7 +49,7 @@ export async function analyzeAerial({ root, map, log = console.log, debugTile = 
     if (!t.nir) continue;
     let rgb, nir;
     try {
-      rgb = await decode(join(root, 'public', 'aerial', t.file));
+      rgb = await decode(join(root, 'data-raw', 'aerial-rgb', t.file));
       nir = await decode(join(root, 'data-raw', 'aerial-nir', `n_${key}.jpg`));
     } catch (err) {
       log(`  skip ${key}: ${err.message}`);

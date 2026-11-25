@@ -1,7 +1,7 @@
 // Downloads public-domain USDA NAIP aerial imagery (via the USGS National Map) for the map extent.
-//   public/aerial/t_{i}_{j}.jpg   500 m RGB tiles shipped with the game (~0.5 m/px)
-//   public/aerial/overview.jpg    whole-map low-res image for distant ground
-//   public/aerial/manifest.json   tile extents in local meters (as returned by the server)
+//   data-raw/aerial-rgb/t_{i}_{j}.jpg   500 m RGB tiles (~0.5 m/px), input to scripts/stylize-ground.mjs
+//   data-raw/aerial-rgb/overview.jpg    whole-map low-res image
+//   data-raw/aerial-rgb/manifest.json   tile extents in local meters (as returned by the server)
 //   data-raw/aerial-nir/…         near-infrared false-color tiles used offline for trees/roofs
 // Usage: node scripts/fetch-aerial.mjs [--force]
 import { mkdir, writeFile, readFile, access } from 'node:fs/promises';
@@ -24,7 +24,7 @@ function magentaFraction(buf) {
 }
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = join(ROOT, 'public', 'aerial');
+const OUT = join(ROOT, 'data-raw', 'aerial-rgb');
 const NIR = join(ROOT, 'data-raw', 'aerial-nir');
 const SERVICE = 'https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer/exportImage';
 const TILE = 500; // meters
@@ -96,7 +96,7 @@ async function worker() {
       bytes += r.buf.length;
       manifest.tiles[key] = { file, ...toLocal(r.extent), w: r.width, h: r.height };
     }
-    if (force || !(await exists(nirFile))) {
+    if (force || !manifest.tiles[key].nir || !(await exists(nirFile))) {
       // NIR, Red, Green false color at ~1 m/px for vegetation (NDVI) analysis; never shipped
       const r = await exportImage({ ...box, w: PX_W / 2, h: Math.round(PX_H / 2), bands: '3,0,1', quality: 90 });
       await writeFile(nirFile, r.buf);

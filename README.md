@@ -54,8 +54,9 @@ The classic look uses only free, open data:
 
 - **Terrain:** real elevation from USGS 3DEP lidar (public domain), baked to a 10 m grid (`npm run fetch-terrain`, then `build-map`). It ranges from 219.7 m above sea level on W Underwood Pkwy to 295.8 m on Colline Vue Blvd. Ground, roads, buildings, trees, street furniture and all cars follow it. It was checked against Google's photogrammetry mesh: within about 1–2 m across 76 m of relief.
 - **Bridges:** bare-earth lidar has no bridges, so OSM bridge ways (chained when split) get a straight deck from abutment to abutment, with parapets. You can drive over them and under them.
-- **Ground:** real aerial photos at 0.5 m per pixel (USDA NAIP via USGS, public domain), streamed in 500 m tiles around the car and draped over the terrain.
-- **Roofs and trees:** roof colors come from the photos. Trees are placed where the infrared band shows tree canopy, about 147k of them.
+- **Ground:** flat cartoon colors matching the rest of the classic look: lawns, tree shade, fields, bare soil, concrete, parking-lot asphalt and water. The layout comes from real aerial photos (USDA NAIP via USGS, public domain). Each ~1 m pixel is classified from the photo plus its infrared band and OSM water and parking areas, then cleaned into simple shapes. Tiles stream in 500 m squares around the car. A shader keeps the shape edges crisp up close.
+- **Roads on hills:** roads are level across their width at the lidar height of their centerline. The ground mesh uses exactly the terrain grid points. The game cuts road beds into it just deep enough that it never shows through a road, and drops an earth bank where the ground falls away beside a road. `npm run audit-ground` checks every road in the city (3 million sample points). The car drives on the same surface you see, and gravity pulls it along slopes.
+- **Roofs and trees:** roof colors come from the aerial photos. Trees are placed where the infrared band shows tree canopy, about 147k of them.
 - **Buildings:** OpenStreetMap footprints with procedural facades: siding, brick and stucco with windows, garage and front doors facing the street, storefronts, office glass and warehouse docks. Roofs are gable or hip on houses, and flat with parapets and rooftop units on commercial buildings.
 - **Street furniture:** traffic signals cycle and AI traffic obeys them. Also stop signs, painted crosswalks, sidewalks, streetlights, green street-name signs, and business-name signs from OSM shops, restaurants and offices.
 
@@ -65,9 +66,10 @@ The facade textures and roof shapes are generic patterns, not copies of real bui
 
 ```bash
 npm run fetch-map -- --force   # downloads raw OSM data from Overpass into data-raw/
-npm run fetch-aerial           # downloads NAIP aerial tiles to public/aerial/ (+ infrared copies in data-raw/)
+npm run fetch-aerial           # downloads NAIP aerial photo + infrared tiles to data-raw/ (inputs only, not shipped)
 npm run fetch-terrain          # downloads USGS 3DEP lidar elevation to data-raw/terrain.tif
-npm run build-map              # bakes everything into public/data/brookfield.json
+npm run build-map              # bakes public/data/ (map + terrain) and the stylized ground tiles in public/ground/
+npm run audit-ground           # checks that the ground never pokes through a road anywhere
 ```
 
 - **Fetch step:** `scripts/fetch-osm.mjs` tries several Overpass mirrors with retries, because the public servers are often overloaded.
@@ -82,13 +84,15 @@ npm run build-map              # bakes everything into public/data/brookfield.js
 | `src/world.js` | Builds road ribbons with mitered joins and junction discs, painted lane lines (double yellow, dashed lanes, edge lines, gaps at intersections), extruded buildings with hip roofs on houses, parks and water, rail lines, and about 90k instanced trees. Static geometry is merged into 500 m tiles so off-screen tiles get culled. |
 | `src/sc430.js` | The player car, a 2002 Lexus SC 430 built from the official spec sheet: 4.515 m long, 1,742 kg. The 3UZ-FE V8 torque curve makes 300 hp and 325 lb-ft. Torque goes through a torque converter and 5-speed automatic (3.266 final drive, 245/40R18) with a rear-wheel-drive traction limit. Drag uses Cd 0.30, and there's a 155 mph limiter. Stock car: 0–60 in 5.96 s, quarter mile in 14.6 s, 60–0 braking in 124 ft, 35.4 ft turning circle. The **Sport tune** (the default; **K** toggles) has 450 hp, no limiter, stickier tires, quicker shifts and a 27.9 ft turning circle: 0–60 in 4.37 s, quarter mile in 12.5 s at 120 mph, 196 mph top speed, 1.18 g cornering. |
 | `src/car.js` | AI car shapes and the contact-shadow texture. |
+| `src/terrain.js` | Loads the elevation grid. `T()` is the drawn ground and `Troad()` the original lidar surface that roads follow. `carveRoadBeds()` lowers the ground under roads just enough. |
+| `src/aerial.js` | Streams the stylized ground tiles as meshes on the exact terrain grid, with the crisp-edge shader. |
+| `scripts/stylize-ground.mjs` | Classifies the aerial photos into the ground palette (run by `build-map`; `--skip-ground` skips it). |
 | `src/traffic.js` | AI cars on the real road graph. They drive on the right, follow one-ways, slow for turns, keep their distance from the car ahead and avoid you. |
 | `src/hud.js` | Speedometer, street-name sign with route shields, the town you're in, a rotating minimap, and the full city map. |
-| `src/spatial.js` | Grid indexes for road and building lookups. `RoadIndex.surfaceHeight()` is the hook for adding bridges and elevation later. |
+| `src/spatial.js` | Grid indexes for road and building lookups. `RoadIndex.surfaceHeight()` gives the drivable height: road surface, bridge deck or ground. |
 
 ## Ideas for next steps
 
-- **Bridges and overpasses.** The world is flat for now, so I-94's overpasses cross at grade. OSM `bridge`/`layer` tags are already kept in the data (`road.b`).
 - **Missions.** Checkpoint races or delivery runs between real places, such as Brookfield Square or the Brookfield East/Central high schools.
 
 Map data © OpenStreetMap contributors, licensed under the ODbL. The in-game attribution must stay visible.

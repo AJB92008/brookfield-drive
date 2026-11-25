@@ -49,6 +49,7 @@ export async function buildTerrain({ root, roads, nodes, spawn, log = console.lo
     }
   }
   if (holes) for (let i = 0; i < grid.length; i++) if (Number.isNaN(grid[i])) grid[i] = minH; // outside coverage: flat
+
   const enc = new Uint16Array(grid.length);
   for (let i = 0; i < grid.length; i++) enc[i] = Math.round((grid[i] - minH) * 10);
   await writeFile(join(root, 'public', 'data', 'terrain.bin'), Buffer.from(enc.buffer));
@@ -59,7 +60,8 @@ export async function buildTerrain({ root, roads, nodes, spawn, log = console.lo
     const c0 = Math.max(0, Math.min(cols - 2, Math.floor(fx))), r0 = Math.max(0, Math.min(rows - 2, Math.floor(fz)));
     const tx = Math.max(0, Math.min(1, fx - c0)), tz = Math.max(0, Math.min(1, fz - r0));
     const g = (r, c) => enc[r * cols + c] * 0.1 + minH;
-    return (g(r0, c0) * (1 - tx) + g(r0, c0 + 1) * tx) * (1 - tz) + (g(r0 + 1, c0) * (1 - tx) + g(r0 + 1, c0 + 1) * tx) * tz;
+    const A = g(r0, c0), D = g(r0, c0 + 1), B = g(r0 + 1, c0), C = g(r0 + 1, c0 + 1);
+    return tx + tz <= 1 ? A + (D - A) * tx + (B - A) * tz : C + (B - C) * (1 - tx) + (D - C) * (1 - tz); // same split as the game
   };
   const base = gridH(spawn.x, spawn.z);
 

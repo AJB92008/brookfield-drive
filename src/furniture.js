@@ -2,7 +2,7 @@
 // streetlights, street-name blades, sidewalks. Positions come pre-computed in map.furniture.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { T } from './terrain.js';
+import { T, Troad } from './terrain.js';
 
 const Y_SIDEWALK = 0.055, Y_XWALK = 0.1;
 export const SIGNAL_CYCLE = 34; // s: phase 0 green 0-13, yellow 13-16, all-red 16-17, phase 1 green 17-30, yellow 30-33, all-red 33-34
@@ -225,8 +225,9 @@ export function buildFurniture(map, group) {
   const flatPos = [], flatCol = [];
   const white = new THREE.Color(0xf0f0ea), concrete = new THREE.Color(0xc7c3ba);
   // y = height above the real ground at each corner
-  const quad = (pts, y, col) => {
-    for (const k of [0, 1, 2, 0, 2, 3]) { flatPos.push(pts[k][0], y + 0.12 + T(pts[k][0], pts[k][1]), pts[k][1]); flatCol.push(col.r, col.g, col.b); }
+  // base: fixed ground height for the whole quad (crosswalks lie on the level road surface)
+  const quad = (pts, y, col, base = null) => {
+    for (const k of [0, 1, 2, 0, 2, 3]) { flatPos.push(pts[k][0], y + 0.15 + (base ?? T(pts[k][0], pts[k][1])), pts[k][1]); flatCol.push(col.r, col.g, col.b); }
   };
   for (let i = 0; i < f.crosswalks.length; i += 5) {
     const [x, z, dx, dz, w] = f.crosswalks.slice(i, i + 5);
@@ -237,7 +238,7 @@ export function buildFurniture(map, group) {
       // bar runs along the road (dx,dz), 2.8 m long
       const c0 = [x + px * a - dx * 1.4, z + pz * a - dz * 1.4], c1 = [x + px * b - dx * 1.4, z + pz * b - dz * 1.4];
       const c2 = [x + px * b + dx * 1.4, z + pz * b + dz * 1.4], c3 = [x + px * a + dx * 1.4, z + pz * a + dz * 1.4];
-      quad([c0, c1, c2, c3], Y_XWALK, white);
+      quad([c0, c1, c2, c3], Y_XWALK, white, Troad(x, z));
     }
   }
   for (const raw of f.sidewalks) {

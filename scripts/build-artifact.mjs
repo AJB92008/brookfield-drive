@@ -1,8 +1,8 @@
 // Packs the Vite build (dist/) into a single self-contained page for hosting:
 //   artifact/index.html          page fragment with CSS + JS inlined (host adds doctype/head/body)
-//   artifact/data/brookfield.json map data, fetched by relative URL
+//   artifact/data/brookfield.json map data, fetched by relative URL (+ terrain, ground tiles, logos)
 // Usage: npm run build:artifact
-import { readFile, writeFile, mkdir, copyFile, cp } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, copyFile, cp, rm } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -48,7 +48,9 @@ await copyFile(join(ROOT, 'public', 'data', 'brookfield.json'), join(OUT, 'data'
 // artifacts don't serve .bin, so ship the terrain grid as base64 JSON (terrain.js falls back to it)
 const terrainBin = await readFile(join(ROOT, 'public', 'data', 'terrain.bin'));
 await writeFile(join(OUT, 'data', 'terrain.b64.json'), JSON.stringify({ data: terrainBin.toString('base64') }));
-// aerial photo tiles + attribution logos are fetched by relative URL
-await cp(join(ROOT, 'public', 'aerial'), join(OUT, 'aerial'), { recursive: true });
+// stylized ground tiles + attribution logos are fetched by relative URL (old photo tiles removed)
+await rm(join(OUT, 'aerial'), { recursive: true, force: true });
+await rm(join(OUT, 'ground'), { recursive: true, force: true });
+await cp(join(ROOT, 'public', 'ground'), join(OUT, 'ground'), { recursive: true });
 await cp(join(ROOT, 'public', 'attribution'), join(OUT, 'attribution'), { recursive: true });
-console.log(`artifact/index.html ${(page.length / 1024).toFixed(0)} KB (+ data/brookfield.json, aerial/, attribution/)`);
+console.log(`artifact/index.html ${(page.length / 1024).toFixed(0)} KB (+ data/, ground/, attribution/)`);

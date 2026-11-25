@@ -1,5 +1,5 @@
 // Uniform-grid spatial indexes for road segments and building edges.
-import { T } from './terrain.js';
+import { T, Troad, ROAD_SURFACE, isMinorRoad } from './terrain.js';
 
 const KEY_OFFSET = 4096;
 const key = (ix, iz) => (ix + KEY_OFFSET) * 8192 + (iz + KEY_OFFSET);
@@ -126,9 +126,22 @@ export class RoadIndex {
   // Height of the drivable surface under (x,z) for something currently at height y: the real terrain,
   // or a bridge deck if one is there and not too far above y (so you can drive under overpasses).
   surfaceHeight(x, z, y = Infinity) {
-    // roads are drawn 0.07 m + a 0.12 m overlay lift above the ground (see world.js GROUND_LIFT)
-    let best = T(x, z) + (this.roadAt(x, z) !== null ? 0.19 : 0);
-    const q = ++this._q;
+    // on a road: the road surface, level across its width at the centerline's original ground height
+    // (0.07 m road layer + 0.15 m GROUND_LIFT, see world.js); elsewhere the drawn (carved) ground
+    let best = T(x, z);
+    let q = ++this._q, bestScore = 0.4, cx = 0, cz = 0;
+    this.grid.forBox(x, z, x, z, (s) => {
+      if (this._stamp[s] === q) return;
+      this._stamp[s] = q;
+      if (!Number.isNaN(this.ya[s])) return; // bridge decks below
+      if (this.minorAsGround && isMinorRoad(this.roads[this.road[s]])) return; // not drawn: drive on the ground
+      const t = segT(x, z, this.ax[s], this.az[s], this.bx[s], this.bz[s]);
+      const px = this.ax[s] + (this.bx[s] - this.ax[s]) * t, pz = this.az[s] + (this.bz[s] - this.az[s]) * t;
+      const score = Math.hypot(x - px, z - pz) - this.roads[this.road[s]].w / 2;
+      if (score < bestScore) { bestScore = score; cx = px; cz = pz; }
+    });
+    if (bestScore < 0.4) best = Math.max(best, Troad(cx, cz) + ROAD_SURFACE);
+    q = ++this._q;
     this.grid.forBox(x, z, x, z, (s) => {
       if (this._stamp[s] === q) return;
       this._stamp[s] = q;
