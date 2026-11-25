@@ -525,7 +525,12 @@ export class PlayerCar {
     }
     if (env.traffic) {
       const hit = env.traffic.collidePlayer(this);
-      if (hit) { bounce(hit.nx, hit.nz, 0.35); this.x += hit.nx * hit.pen; this.z += hit.nz * hit.pen; }
+      if (hit) {
+        // momentum exchange with the other vehicle (computed by traffic from both masses)
+        this.vx += hit.dvx; this.vz += hit.dvz;
+        this.x += hit.nx * hit.pen; this.z += hit.nz * hit.pen;
+        hitSpeed = Math.max(hitSpeed, hit.impact);
+      }
     }
     this.impact = hitSpeed;
   }

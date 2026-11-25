@@ -48,6 +48,21 @@ To update the hosted copy after changing the code, run `npm run build:artifact`.
 
 A gamepad also works: left stick steers, RT is gas, LT is brake, A/B is handbrake, Y changes camera, X resets, Back opens the map.
 
+## Traffic and police
+
+About 150 AI vehicles drive around you on the real road graph. Busy roads like Bluemound, Moorland and I-94 get the most traffic; side streets get a little.
+
+- **Speed limits:** every driver aims for the posted limit of the road it's on. Limits come from OSM where tagged (all major roads), else from the nearest tagged stretch of the same street, else Wisconsin defaults (25 mph in residential areas). The HUD shows the limit where you are.
+- **Drivers:** car-following uses the Intelligent Driver Model. A quarter of drivers are cautious (a bit under the limit, long gaps), most are normal (at the limit) and about 1 in 7 is aggressive (10–18% over, tailgating, rolling stops).
+- **Intersections:** cars stop at red lights and turn right on red after a full stop. They stop at stop signs: all-way stops go first come, first served, and two-way stops wait for a gap. They yield to bigger roads and to the right on equal roads, and left turns yield to oncoming traffic. Ramps merge onto I-94 by finding a gap.
+  - Each car reserves its path through a junction before entering, and paths that come within a car width of each other are never in it together. Divided-road intersections made of several nodes are treated as one intersection.
+  - Nobody enters an intersection they can't get out of.
+- **Lanes:** cars change lanes to pass slower traffic (MOBIL), keep right, and move over early for turns and lane drops. They take smooth curves through every junction and signal before turning or changing lanes.
+- **Vehicles:** sedans, SUVs, pickups, minivans, box trucks, city buses and semis with trailers that track behind the cab. Each has its own size, mass and acceleration. Brake lights, turn signals and hazard lights work.
+- **You:** cars predict your path and brake or swerve if you cut them off, and they yield to you at junctions. Hit one and momentum is exchanged by mass: it slides and spins, puts its hazards on, then pulls back onto the road. Crashed cars can knock into other cars.
+- **Police:** a few patrol cars drive around. Go 15+ mph over the limit near one, crash into someone near one, or hit one, and they come after you with lights flashing. They route through the streets toward you, chase you down up close, and other drivers pull over to let them by. Stay more than about 320 m from every cruiser for 10 s to escape. Stop with one right next to you and you're busted.
+- **Testing:** the traffic was tuned with a headless simulation that measures collisions between AI cars, stuck cars, red lights and stop signs run, and speeds against the limit.
+
 ## Classic look: what it's made of
 
 The classic look uses only free, open data:
@@ -83,11 +98,14 @@ npm run audit-ground           # checks that the ground never pokes through a ro
 | `scripts/build-map.mjs` | Projects lat/lon to local meters (x = east, z = south). Works out road widths from lanes and road class, building heights from tags or footprint size, and ground areas. Stitches multipolygon rings and picks the spawn point (W Bluemound Rd at Moorland Rd). |
 | `src/world.js` | Builds road ribbons with mitered joins and junction discs, painted lane lines (double yellow, dashed lanes, edge lines, gaps at intersections), extruded buildings with hip roofs on houses, parks and water, rail lines, and about 90k instanced trees. Static geometry is merged into 500 m tiles so off-screen tiles get culled. |
 | `src/sc430.js` | The player car, a 2002 Lexus SC 430 built from the official spec sheet: 4.515 m long, 1,742 kg. The 3UZ-FE V8 torque curve makes 300 hp and 325 lb-ft. Torque goes through a torque converter and 5-speed automatic (3.266 final drive, 245/40R18) with a rear-wheel-drive traction limit. Drag uses Cd 0.30, and there's a 155 mph limiter. Stock car: 0–60 in 5.96 s, quarter mile in 14.6 s, 60–0 braking in 124 ft, 35.4 ft turning circle. The **Sport tune** (the default; **K** toggles) has 450 hp, no limiter, stickier tires, quicker shifts and a 27.9 ft turning circle: 0–60 in 4.37 s, quarter mile in 12.5 s at 120 mph, 196 mph top speed, 1.18 g cornering. |
-| `src/car.js` | AI car shapes and the contact-shadow texture. |
+| `src/car.js` | The contact-shadow texture. |
+| `src/vehicles.js` | AI vehicle types: models, sizes, masses and acceleration, plus the lamp shader for brake lights, turn signals and police lights. |
+| `src/speedlimits.js` | Posted speed limit for every road. |
+| `src/police.js` | When police chase you, escapes, busts, and the pursuit banner. |
 | `src/terrain.js` | Loads the elevation grid. `T()` is the drawn ground and `Troad()` the original lidar surface that roads follow. `carveRoadBeds()` lowers the ground under roads just enough. |
 | `src/aerial.js` | Streams the stylized ground tiles as meshes on the exact terrain grid, with the crisp-edge shader. |
 | `scripts/stylize-ground.mjs` | Classifies the aerial photos into the ground palette (run by `build-map`; `--skip-ground` skips it). |
-| `src/traffic.js` | AI cars on the real road graph. They drive on the right, follow one-ways, slow for turns, keep their distance from the car ahead and avoid you. |
+| `src/traffic.js` | AI traffic on the real road graph: IDM driving, junction reservations and right-of-way rules, MOBIL lane changes, junction curves, crashes, and police routing and chasing. |
 | `src/hud.js` | Speedometer, street-name sign with route shields, the town you're in, a rotating minimap, and the full city map. |
 | `src/spatial.js` | Grid indexes for road and building lookups. `RoadIndex.surfaceHeight()` gives the drivable height: road surface, bridge deck or ground. |
 

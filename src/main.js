@@ -3,6 +3,7 @@ import { RoadIndex, BuildingIndex } from './spatial.js';
 import { buildWorld } from './world.js';
 import { PlayerCar, tuneSummary } from './sc430.js';
 import { Traffic } from './traffic.js';
+import { Police } from './police.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
 import { AerialGround } from './aerial.js';
@@ -88,8 +89,8 @@ async function main(saved = {}) {
   }
 
   await status('Starting traffic…');
-  const traffic = new Traffic(map, scene, { maxCars: 150 });
-  console.log(`[brookfield] traffic graph: ${traffic.edges.length} directed edges`);
+  const traffic = new Traffic(map, scene, { maxCars: 150, roads, buildings });
+  console.log(`[brookfield] traffic graph: ${traffic.edges.length} directed edges, ${traffic.signalEdges} signal approaches, ${traffic.stopEdges} stop-sign approaches`);
 
   const player = new PlayerCar(scene, renderer);
   const env = { roads, buildings, trees: world.treePoints, traffic, bounds: map.bounds };
@@ -118,6 +119,7 @@ async function main(saved = {}) {
   if (Number.isFinite(saved.x) && Number.isFinite(saved.z)) player.place(saved.x, saved.z, saved.heading || 0);
 
   const hud = new Hud(map, roads);
+  const police = new Police({ traffic, hud, roads, map });
   hud.onTeleport = (x, z) => { placeOnRoad(x, z, player.heading); afterMove(); };
 
   // ---------- photoreal (Google 3D Tiles via Cesium ion) vs classic (built from OSM) ----------
@@ -162,6 +164,7 @@ async function main(saved = {}) {
   function afterMove() {
     traffic.clear();
     traffic._seeded = false;
+    police.reset();
     if (mode === 'photo') { player.groundPending = true; groundPendingSince = performance.now(); } else useClassicGround();
     snapCamera();
   }
@@ -261,7 +264,7 @@ async function main(saved = {}) {
   input.on('Escape', () => hud.toggleBig(false));
   input.on('KeyR', () => { placeOnRoad(player.x, player.z, player.heading); afterMove(); });
   input.on('KeyP', () => applyMode(mode === 'photo' ? 'classic' : 'photo'));
-  input.on('KeyT', () => { traffic.enabled = !traffic.enabled; if (!traffic.enabled) traffic.clear(); traffic._seeded = false; });
+  input.on('KeyT', () => { traffic.enabled = !traffic.enabled; if (!traffic.enabled) { traffic.clear(); police.reset(); } traffic._seeded = false; });
   input.on('KeyH', () => helpEl.classList.toggle('hidden'));
   input.on('KeyI', () => { const el = document.getElementById('spec'); el.hidden = !el.hidden; });
   // Stock (the real car) vs Sport tune; remembered between visits
@@ -353,6 +356,7 @@ async function main(saved = {}) {
       player.updateVertical(realDt, env);
       if (impact > 4) shake = Math.min(1.2, impact * 0.08);
       traffic.update(realDt, player, now / 1000);
+      police.update(realDt, player);
     }
     if (mode === 'classic') {
       if (aerial) aerial.update(player.x, player.z);
@@ -392,7 +396,7 @@ async function main(saved = {}) {
   updateHint();
 
   // handle for debugging / automated checks
-  window.__game = { THREE, map, get aerial() { return aerial; }, roads, buildings, world, traffic, player, renderer, scene, camera, hud, input, stats, placeOnRoad, afterMove, applyMode, get mode() { return mode; }, get photo() { return photo; }, setCam: (i) => { camMode = i; } };
+  window.__game = { THREE, map, get aerial() { return aerial; }, roads, buildings, world, traffic, police, player, renderer, scene, camera, hud, input, stats, placeOnRoad, afterMove, applyMode, get mode() { return mode; }, get photo() { return photo; }, setCam: (i) => { camMode = i; } };
 }
 
 function boot(saved) {
