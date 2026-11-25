@@ -1479,6 +1479,12 @@ export class Traffic {
     }
   }
   spawnPursuer(px, pz, heading) {
+    // traffic is at its cap: retire the farthest ordinary car to make room for the cruiser
+    if (this.cars.length >= this.maxCars) {
+      let far = null, fd = -1;
+      for (const c of this.cars) { if (c.police) continue; const d = Math.hypot(c.x - px, c.z - pz); if (d > fd) { fd = d; far = c; } }
+      if (far) this.removeCar(far);
+    }
     // prefer roads behind you, out of sight
     for (let k = 0; k < 4; k++) {
       const c = this.spawnNear(px, pz, 170, 290, { police: true });
