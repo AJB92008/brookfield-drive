@@ -375,7 +375,7 @@ export class PlayerCar {
     this.headingRate = 0;
     this.roll = 0; this.rollRate = 0; this.lift = 0; this.lowCorner = 0;
     this.jPitch = 0; this.jPitchRate = 0; this.jRoll = 0; this.jRollRate = 0;
-    this.tripped = false; this.flipped = false; this.flipT = 0;
+    this.tripped = false; this.flipped = false; this.flipT = 0; this.skidT = 0;
     this.contacts = [];
   }
 
@@ -494,7 +494,8 @@ export class PlayerCar {
     const maxYaw = Math.min(2.5, latMax / Math.max(absV, 0.5));
     yaw = Math.max(-maxYaw, Math.min(maxYaw, yaw));
     // skidding (knocked sideways or spun): tires slide, steering barely bites
-    const sliding = Math.abs(vl) > 3 || Math.abs(this.spin) > 0.9;
+    this.skidT = Math.max(0, (this.skidT || 0) - dt);
+    const sliding = (this.skidT > 0 && Math.abs(vl) > 1.5) || Math.abs(this.spin) > 0.9;
     if (rolled) yaw = 0;
     else if (sliding) yaw *= 0.35;
     this.heading -= yaw * dt; // the velocity turns with steering (tires gripping)...
@@ -595,6 +596,7 @@ export class PlayerCar {
     const m = SC430.massKg;
     const dvx = ix / m, dvz = iz / m;
     this.vx += dvx; this.vz += dvz;
+    if (Math.hypot(dvx, dvz) > 2) this.skidT = 1.5; // knocked loose: the tires skid for a moment
     this.spin = Math.max(-6, Math.min(6, this.spin + (ix * px + iz * pz) / INERTIA));
     const fx = Math.sin(this.heading), fz = Math.cos(this.heading), rx = -Math.cos(this.heading), rz = Math.sin(this.heading);
     const dvf = dvx * fx + dvz * fz, dvl = dvx * rx + dvz * rz;

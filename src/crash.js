@@ -276,7 +276,12 @@ export class Damage {
     const dx = cx - P.x, dz = cz - P.z;
     const along = dx * fx + dz * fz, left = dx * lx + dz * lz;
     const zone = Math.abs(along) > 1.45 ? (along > 0 ? 'front' : 'rear') : left > 0 ? 'left' : 'right';
-    const dmg = Math.min(70, Math.pow(impact - 2, 1.35) * 1.15);
+    let dmg = Math.min(70, Math.pow(impact - 2, 1.35) * 1.15);
+    // one crash often makes several contacts in a row (the other car keeps shoving): count the worst once
+    const now = performance.now();
+    const recent = this.lastHit && now - this.lastHit.t < 300 && this.lastHit.zone === zone ? this.lastHit.dmg : 0;
+    this.lastHit = { t: now, zone, dmg: Math.max(dmg, recent) };
+    dmg = Math.max(0, dmg - recent);
     this.zones[zone] = Math.min(100, this.zones[zone] + dmg);
     // dent the body where it was hit (push direction in car-local coordinates: x = left, z = forward)
     const pnx = nx * lx + nz * lz, pnz = nx * fx + nz * fz;

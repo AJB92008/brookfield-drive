@@ -1366,10 +1366,11 @@ export class Traffic {
 
   // Impulse on `car` at a contact point. n = unit normal from the other body toward `car` (car is pushed
   // along +n), rel = car velocity - other velocity. Returns the impulse magnitude (0 if separating).
-  impulse(car, rel, nx, nz, cx, cz, otherMass) {
+  impulse(car, rel, nx, nz, cx, cz, otherMass, otherRot = 0) {
     const vn = rel[0] * nx + rel[1] * nz;
     if (vn >= 0) return 0;
-    const J = (-(1 + 0.25 * Math.exp(vn / 14) + 0.04) * vn) / (1 / otherMass + 1 / car.mass); // less bounce in hard hits
+    // less bounce in hard hits; otherRot = the other body's rotational term (rn^2 / I) at the contact
+    const J = (-(1 + 0.25 * Math.exp(vn / 14) + 0.04) * vn) / (1 / otherMass + 1 / car.mass + otherRot);
     const [vx, vz] = this.velocityOf(car);
     const dvA = J / car.mass;
     const big = car.type.big && car.mode === 'drive';
@@ -1419,8 +1420,12 @@ export class Traffic {
     const rel = [player.vx - ax, player.vz - az];
     const vn = rel[0] * best.nx + rel[1] * best.nz;
     if (vn < 0) {
-      // AI car's view: normal from the player toward it, velocity relative to the player
-      const J = this.impulse(car, [-rel[0], -rel[1]], -best.nx, -best.nz, best.cx, best.cz, mP);
+      // AI car's view: normal from the player toward it, velocity relative to the player. The player's
+      // rotation at its contact point softens the hit (and is what makes corner hits spin you).
+      const prx = best.pcx - player.x, prz = best.pcz - player.z;
+      const rnP = prz * best.nx - prx * best.nz;
+      const IP = (1742 * (4.515 ** 2 + 1.825 ** 2)) / 12;
+      const J = this.impulse(car, [-rel[0], -rel[1]], -best.nx, -best.nz, best.cx, best.cz, mP, (rnP * rnP) / IP);
       out.dvx = (J / mP) * best.nx; out.dvz = (J / mP) * best.nz; out.J = J;
       out.impact = -vn;
       if (-vn > 1) this.events.push({ type: 'hit', car, speed: -vn, time: this.time });
