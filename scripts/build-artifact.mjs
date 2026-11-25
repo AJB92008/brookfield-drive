@@ -45,7 +45,9 @@ ${js}
 await mkdir(join(OUT, 'data'), { recursive: true });
 await writeFile(join(OUT, 'index.html'), page);
 await copyFile(join(ROOT, 'public', 'data', 'brookfield.json'), join(OUT, 'data', 'brookfield.json'));
-await copyFile(join(ROOT, 'public', 'data', 'terrain.bin'), join(OUT, 'data', 'terrain.bin'));
+// artifacts don't serve .bin, so ship the terrain grid as base64 JSON (terrain.js falls back to it)
+const terrainBin = await readFile(join(ROOT, 'public', 'data', 'terrain.bin'));
+await writeFile(join(OUT, 'data', 'terrain.b64.json'), JSON.stringify({ data: terrainBin.toString('base64') }));
 // aerial photo tiles + attribution logos are fetched by relative URL
 await cp(join(ROOT, 'public', 'aerial'), join(OUT, 'aerial'), { recursive: true });
 await cp(join(ROOT, 'public', 'attribution'), join(OUT, 'attribution'), { recursive: true });

@@ -7,9 +7,18 @@ export function setTerrain(fn) { heightFn = fn || (() => 0); }
 export async function loadTerrain(map, base = import.meta.env?.BASE_URL ?? '/') {
   const m = map.terrain;
   if (!m) return null;
-  const res = await fetch(`${base}data/terrain.bin`);
-  if (!res.ok) throw new Error(`terrain.bin HTTP ${res.status}`);
-  const grid = new Uint16Array(await res.arrayBuffer());
+  let grid;
+  const res = await fetch(`${base}data/terrain.bin`).catch(() => null);
+  if (res?.ok) grid = new Uint16Array(await res.arrayBuffer());
+  else {
+    // hosts that don't serve .bin files get the same grid as base64 inside JSON
+    const alt = await fetch(`${base}data/terrain.b64.json`);
+    if (!alt.ok) throw new Error(`terrain data HTTP ${res?.status ?? 'error'} / ${alt.status}`);
+    const bin = atob((await alt.json()).data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    grid = new Uint16Array(bytes.buffer);
+  }
   if (grid.length !== m.cols * m.rows) throw new Error('terrain.bin size mismatch');
   const { step, minX, minZ, cols, rows, scale } = m;
   const off = m.minH - m.base;
