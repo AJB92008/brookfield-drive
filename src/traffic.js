@@ -1369,7 +1369,7 @@ export class Traffic {
   impulse(car, rel, nx, nz, cx, cz, otherMass) {
     const vn = rel[0] * nx + rel[1] * nz;
     if (vn >= 0) return 0;
-    const J = (-(1 + 0.25) * vn) / (1 / otherMass + 1 / car.mass);
+    const J = (-(1 + 0.25 * Math.exp(vn / 14) + 0.04) * vn) / (1 / otherMass + 1 / car.mass); // less bounce in hard hits
     const [vx, vz] = this.velocityOf(car);
     const dvA = J / car.mass;
     const big = car.type.big && car.mode === 'drive';
@@ -1406,14 +1406,14 @@ export class Traffic {
       for (let i = 0; i < pc.length; i += 3) {
         for (let j = 0; j < cc.length; j += 3) {
           const dx = pc[i] - cc[j], dz = pc[i + 1] - cc[j + 1], d = Math.hypot(dx, dz), min = pc[i + 2] + cc[j + 2];
-          if (d < min && d > 1e-4 && (!best || min - d > best.pen)) best = { car, nx: dx / d, nz: dz / d, pen: min - d, cx: cc[j] + (dx / d) * cc[j + 2], cz: cc[j + 1] + (dz / d) * cc[j + 2] };
+          if (d < min && d > 1e-4 && (!best || min - d > best.pen)) best = { car, nx: dx / d, nz: dz / d, pen: min - d, cx: cc[j] + (dx / d) * cc[j + 2], cz: cc[j + 1] + (dz / d) * cc[j + 2], pcx: pc[i] - (dx / d) * pc[i + 2], pcz: pc[i + 1] - (dz / d) * pc[i + 2] };
         }
       }
     }
     if (!best) return null;
     const car = best.car;
     const share = car.mass / (car.mass + mP);
-    const out = { nx: best.nx, nz: best.nz, pen: best.pen * share, dvx: 0, dvz: 0, impact: 0, car };
+    const out = { nx: best.nx, nz: best.nz, pen: best.pen * share, dvx: 0, dvz: 0, impact: 0, J: 0, pcx: best.pcx, pcz: best.pcz, car };
     if (car.mode === 'crash') { car.x -= best.nx * best.pen * (1 - share); car.z -= best.nz * best.pen * (1 - share); }
     const [ax, az] = this.velocityOf(car);
     const rel = [player.vx - ax, player.vz - az];
@@ -1421,7 +1421,7 @@ export class Traffic {
     if (vn < 0) {
       // AI car's view: normal from the player toward it, velocity relative to the player
       const J = this.impulse(car, [-rel[0], -rel[1]], -best.nx, -best.nz, best.cx, best.cz, mP);
-      out.dvx = (J / mP) * best.nx; out.dvz = (J / mP) * best.nz;
+      out.dvx = (J / mP) * best.nx; out.dvz = (J / mP) * best.nz; out.J = J;
       out.impact = -vn;
       if (-vn > 1) this.events.push({ type: 'hit', car, speed: -vn, time: this.time });
     }

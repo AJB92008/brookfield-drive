@@ -82,6 +82,10 @@ export function buildFurniture(map, group) {
   const f = map.furniture;
   if (!f) return null;
   const out = new THREE.Group();
+  // everything a car can hit: { kind, x, z, gy, r, breakable, rotY, i } (signal poles are rigid; streetlights,
+  // stop signs and street-name posts are breakaway, like the real ones)
+  const obstacles = [];
+  let stopMeshes = [], lightMesh = null, signParts = [];
   out.name = 'furniture';
   group.add(out);
   const galv = new THREE.MeshLambertMaterial({ color: 0x8a9096 });
@@ -99,6 +103,7 @@ export function buildFurniture(map, group) {
     for (const [px, pz, fx, fz, ax, az, len, heads, phase] of s.p) {
       const gy = T(px, pz); // pole base on the real ground
       staticParts.push(place(poleGeo, px, gy, pz));
+      obstacles.push({ kind: 'signal', x: px, z: pz, gy, r: 0.2, breakable: false });
       const armRot = Math.atan2(ax, az);
       const arm = armGeo.clone().scale(1, 1, len);
       staticParts.push(place(arm, px, gy + 6.6, pz, armRot));
@@ -157,8 +162,10 @@ export function buildFurniture(map, group) {
       q.setFromEuler(e.set(0, Math.atan2(fx, fz), 0));
       m4.compose(pv.set(x, T(x, z), z), q, sc);
       post.setMatrixAt(i, m4); face.setMatrixAt(i, m4); back.setMatrixAt(i, m4);
+      obstacles.push({ kind: 'stop', x, z, gy: T(x, z), r: 0.05, breakable: true, rotY: Math.atan2(fx, fz), i });
     }
     add(post); add(face); add(back);
+    stopMeshes = [post, face, back];
   }
 
   // ---------- streetlights (cobra heads) ----------
@@ -175,9 +182,11 @@ export function buildFurniture(map, group) {
       q.setFromEuler(e.set(0, Math.atan2(dx, dz), 0));
       m4.compose(pv.set(x, T(x, z), z), q, sc);
       lightsMesh.setMatrixAt(i, m4);
+      obstacles.push({ kind: 'light', x, z, gy: T(x, z), r: 0.13, breakable: true, rotY: Math.atan2(dx, dz), i });
     }
     lightsMesh.computeBoundingSphere();
     add(lightsMesh);
+    lightMesh = lightsMesh;
   }
 
   // ---------- street-name signs ----------
@@ -190,6 +199,7 @@ export function buildFurniture(map, group) {
       const [x, z, n1, a1, n2, a2] = f.streetSigns.slice(i * 6, i * 6 + 6);
       const gy = T(x, z);
       posts.push(place(new THREE.CylinderGeometry(0.03, 0.03, 2.9, 5).translate(0, 1.45, 0), x, gy, z));
+      obstacles.push({ kind: 'sign', x, z, gy, r: 0.05, breakable: true, i });
       [[n1, a1, 2.82], [n2, a2, 2.6]].forEach(([n, ang, y]) => {
         const len = 0.35 + atlas.widths[n] * 1.0;
         blades.push(place(new THREE.BoxGeometry(0.025, 0.17, len), x, gy + y, z, ang));
@@ -212,13 +222,17 @@ export function buildFurniture(map, group) {
         }
       });
     }
-    add(new THREE.Mesh(mergeGeometries(posts.map((g) => g.toNonIndexed())), galv));
-    add(new THREE.Mesh(mergeGeometries(blades.map((g) => g.toNonIndexed())), signGreen));
+    const postNI = posts.map((g) => g.toNonIndexed()), bladeNI = blades.map((g) => g.toNonIndexed());
+    const postMesh = add(new THREE.Mesh(mergeGeometries(postNI), galv));
+    const bladeMesh = add(new THREE.Mesh(mergeGeometries(bladeNI), signGreen));
     const tg = new THREE.BufferGeometry();
     tg.setAttribute('position', new THREE.Float32BufferAttribute(textPos, 3));
     tg.setAttribute('uv', new THREE.Float32BufferAttribute(textUv, 2));
     tg.computeVertexNormals();
-    add(new THREE.Mesh(tg, new THREE.MeshBasicMaterial({ color: 0xf4f4f4, alphaMap: atlas.tex, alphaTest: 0.35, side: THREE.DoubleSide })), false);
+    const textMesh = add(new THREE.Mesh(tg, new THREE.MeshBasicMaterial({ color: 0xf4f4f4, alphaMap: atlas.tex, alphaTest: 0.35, side: THREE.DoubleSide })), false);
+    // every sign adds the same number of vertices to each merged mesh: [mesh, vertices per sign]
+    signParts = [[postMesh, postNI[0].attributes.position.count], [bladeMesh, bladeNI[0].attributes.position.count * 2], [textMesh, 24]];
+    for (const [mesh] of signParts) mesh.userData.orig = Float32Array.from(mesh.geometry.attributes.position.array);
   }
 
   // ---------- crosswalks + sidewalks (flat) ----------
@@ -263,9 +277,34 @@ export function buildFurniture(map, group) {
     out.add(fm);
   }
 
+  // Knock a breakaway pole over: rotate it about its base by `angle` toward horizontal direction (dx, dz).
+  const tq = new THREE.Quaternion(), ry = new THREE.Quaternion(), ax = new THREE.Vector3(), tv = new THREE.Vector3();
+  function setTilt(ob, angle, dx, dz) {
+    tq.setFromAxisAngle(ax.set(dz, 0, -dx).normalize(), angle);
+    if (ob.kind === 'stop' || ob.kind === 'light') {
+      ry.setFromEuler(e.set(0, ob.rotY, 0));
+      m4.compose(pv.set(ob.x, ob.gy, ob.z), tq.clone().multiply(ry), sc);
+      for (const mesh of ob.kind === 'stop' ? stopMeshes : [lightMesh]) { mesh.setMatrixAt(ob.i, m4); mesh.instanceMatrix.needsUpdate = true; }
+    } else if (ob.kind === 'sign') {
+      for (const [mesh, per] of signParts) {
+        const attr = mesh.geometry.attributes.position, a = attr.array, o = mesh.userData.orig;
+        const start = ob.i * per;
+        for (let k = start; k < start + per; k++) {
+          tv.set(o[k * 3] - ob.x, o[k * 3 + 1] - ob.gy, o[k * 3 + 2] - ob.z).applyQuaternion(tq);
+          a[k * 3] = tv.x + ob.x; a[k * 3 + 1] = tv.y + ob.gy; a[k * 3 + 2] = tv.z + ob.z;
+        }
+        attr.clearUpdateRanges();
+        attr.addUpdateRange(start * 3, per * 3);
+        attr.needsUpdate = true;
+      }
+    }
+  }
+
   return {
     group: out,
     updateSignals,
+    obstacles,
+    setTilt,
     offsets,
     stats: { signals: f.signals.length, lamps: lamps.length, stops: nStops, lights: nLights, signs: nSigns, crosswalks: f.crosswalks.length / 5, sidewalks: f.sidewalks.length },
   };

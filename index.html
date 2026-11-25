@@ -26,6 +26,17 @@
       <canvas id="minimap"></canvas>
       <div id="traffic-count"></div>
 
+      <div id="damage" hidden>
+        <svg viewBox="0 0 40 70" aria-hidden="true">
+          <rect id="dz-front" x="8" y="2" width="24" height="15" rx="6" />
+          <rect id="dz-left" x="3" y="19" width="8" height="32" rx="3" />
+          <rect id="dz-right" x="29" y="19" width="8" height="32" rx="3" />
+          <rect id="dz-rear" x="8" y="53" width="24" height="15" rx="6" />
+          <rect x="13" y="22" width="14" height="26" rx="3" fill="rgba(255,255,255,0.08)" />
+        </svg>
+        <div class="d-text"><b id="damage-pct">0%</b><span>damage</span><span class="d-hint">R repairs</span></div>
+      </div>
+
       <div id="limit-sign" hidden><div class="t">SPEED<br>LIMIT</div><div id="limit-num">25</div></div>
 
       <div id="wanted" hidden>
@@ -69,7 +80,7 @@
         <div><kbd>W</kbd><kbd>↑</kbd> gas &nbsp; <kbd>S</kbd><kbd>↓</kbd> brake / reverse</div>
         <div><kbd>A</kbd><kbd>D</kbd><kbd>←</kbd><kbd>→</kbd> steer &nbsp; <kbd>Space</kbd> handbrake</div>
         <div><kbd>C</kbd> camera &nbsp; <kbd>V</kbd> look at the car &nbsp; <kbd>M</kbd> city map</div>
-        <div><kbd>R</kbd> back on the road &nbsp; <kbd>T</kbd> traffic on/off</div>
+        <div><kbd>R</kbd> back on the road (repairs the car) &nbsp; <kbd>T</kbd> traffic on/off</div>
         <div class="help-note">Police chase you for going 15+ over the limit or crashing near them. Get far away to escape.</div>
         <div><kbd>P</kbd> photoreal 3D city / classic &nbsp; <kbd>I</kbd> car specs &nbsp; <kbd>K</kbd> stock / sport tune</div>
         <div><kbd>H</kbd> hide this</div>

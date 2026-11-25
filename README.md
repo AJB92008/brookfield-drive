@@ -41,7 +41,7 @@ To update the hosted copy after changing the code, run `npm run build:artifact`.
 | I | Show the car's spec sheet |
 | K | Switch between the Sport tune (default) and the stock car |
 | M | City map. Click anywhere on it to teleport there |
-| R | Put the car back on the nearest road |
+| R | Put the car back on the nearest road, upright and repaired |
 | T | Turn traffic on or off |
 | P | Switch between the photoreal 3D city and the classic look |
 | H | Show or hide the controls panel |
@@ -62,6 +62,27 @@ About 150 AI vehicles drive around you on the real road graph. Busy roads like B
 - **You:** cars predict your path and brake or swerve if you cut them off, and they yield to you at junctions. Hit one and momentum is exchanged by mass: it slides and spins, puts its hazards on, then pulls back onto the road. Crashed cars can knock into other cars.
 - **Police:** a few patrol cars drive around. Go 15+ mph over the limit near one, crash into someone near one, or hit one, and they come after you with lights flashing. They route through the streets toward you, chase you down up close, and other drivers pull over to let them by. Stay more than about 320 m from every cruiser for 10 s to escape. Stop with one right next to you and you're busted.
 - **Testing:** the traffic was tuned with a headless simulation that measures collisions between AI cars, stuck cars, red lights and stop signs run, and speeds against the limit.
+
+## Crashes
+
+Your car is a rigid body: 1,742 kg, with its real length and width. Hits are resolved at the actual contact point.
+
+- **How it reacts:**
+  - A head-on hit stops you hard. Crumple zones absorb most of it, so a 45 mph wall hit bounces back at only about 5 mph.
+  - An off-center or angled hit spins you.
+  - A glancing hit deflects you, and you scrape along the wall.
+  - Hit another car and momentum is shared by mass, so a semi barely moves and you go flying.
+- **Skids:** after a hit the tires skid on friction instead of snapping straight, so you slide and rotate realistically. The body pitches and rolls with the impact.
+- **Rollovers:** sliding sideways off the pavement at about 20+ mph trips the car, and so does a hard enough shove from the side. Whether it tips is worked out from its center of gravity and body shape, and it can come to rest on its side or roof. Press R to flip it back over.
+- **What you can hit:**
+  - Buildings, trees and other cars.
+  - Traffic-signal poles, which are rigid.
+  - Streetlights, stop signs and street-name signs, which break away at the base and fall over the way you were going. That's how the real ones are designed.
+- **Effects:** hot sparks at metal contacts and while scraping, plus flying debris: body bits, glass from broken lights, mirrors, leaves.
+- **Damage:** front, rear, left and right are tracked separately, and the meter next to the speedometer shows each zone.
+  - **On the car:** the body dents and crumples where you hit, and lights and mirrors break off. A damaged engine smokes, black when it's bad. A badly bent wheel leans.
+  - **On the driving:** front damage costs power and top speed. A bent side pulls the steering that way and costs grip, and a badly bent wheel shimmies.
+  - **R repairs everything.**
 
 ## Classic look: what it's made of
 
@@ -102,6 +123,7 @@ npm run audit-ground           # checks that the ground never pokes through a ro
 | `src/vehicles.js` | AI vehicle types: models, sizes, masses and acceleration, plus the lamp shader for brake lights, turn signals and police lights. |
 | `src/speedlimits.js` | Posted speed limit for every road. |
 | `src/police.js` | When police chase you, escapes, busts, and the pursuit banner. |
+| `src/crash.js` | Crash effects: sparks, debris, smoke, the damage model (dents, broken parts, effects on driving, HUD meter), and breakaway poles. |
 | `src/terrain.js` | Loads the elevation grid. `T()` is the drawn ground and `Troad()` the original lidar surface that roads follow. `carveRoadBeds()` lowers the ground under roads just enough. |
 | `src/aerial.js` | Streams the stylized ground tiles as meshes on the exact terrain grid, with the crisp-edge shader. |
 | `scripts/stylize-ground.mjs` | Classifies the aerial photos into the ground palette (run by `build-map`; `--skip-ground` skips it). |

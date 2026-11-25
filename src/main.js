@@ -4,6 +4,7 @@ import { buildWorld } from './world.js';
 import { PlayerCar, tuneSummary } from './sc430.js';
 import { Traffic } from './traffic.js';
 import { Police } from './police.js';
+import { CrashSystem } from './crash.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
 import { AerialGround } from './aerial.js';
@@ -120,6 +121,11 @@ async function main(saved = {}) {
 
   const hud = new Hud(map, roads);
   const police = new Police({ traffic, hud, roads, map });
+  // crashes: sparks / debris / smoke, damage, breakaway poles
+  const crash = new CrashSystem({ scene, player, furniture: world.furniture, ground: null, hud });
+  env.crash = crash;
+  env.poles = crash.poles;
+  env.onFlipped = () => hud.toast(`Your car is on its ${Math.abs(player.roll) > 2.3 ? 'roof' : 'side'}. Press R to flip it back over (and fix it).`, 6000);
   hud.onTeleport = (x, z) => { placeOnRoad(x, z, player.heading); afterMove(); };
 
   // ---------- photoreal (Google 3D Tiles via Cesium ion) vs classic (built from OSM) ----------
@@ -152,6 +158,7 @@ async function main(saved = {}) {
   const classicInit = (x, z, bridge) => roads.surfaceHeight(x, z, bridge ? 1e9 : T(x, z) + 0.5);
   function useClassicGround() {
     env.ground = map.terrain ? classicGround : null;
+    crash?.setGround(env.ground);
     traffic.setGround(map.terrain ? classicGround : null, map.terrain ? classicInit : null, { cheap: true, blobs: false });
     player.groundPending = false;
     player.y = map.terrain ? classicInit(player.x, player.z, onBridge(player.x, player.z)) : 0;
@@ -185,8 +192,10 @@ async function main(saved = {}) {
     camera.far = on ? 4500 : 1650;
     camera.updateProjectionMatrix();
     env.trees = on ? null : world.treePoints;
+    env.poles = on ? null : crash.poles; // the classic street furniture isn't there in the 3D city
     if (on) {
       env.ground = groundFn;
+      crash.setGround(groundFn);
       traffic.setGround(groundFn, groundInitFn);
       player.groundPending = true; groundPendingSince = performance.now();
     } else useClassicGround();
@@ -202,7 +211,8 @@ async function main(saved = {}) {
   const look = new THREE.Vector3();
   let shake = 0;
   function camTarget(out) {
-    const fx = Math.sin(player.heading), fz = Math.cos(player.heading);
+    const ch = player.camHeading ?? player.heading;
+    const fx = Math.sin(ch), fz = Math.cos(ch);
     const v = Math.abs(player.speed);
     switch (CAM_MODES[camMode]) {
       case 'far': return out.set(player.x - fx * 16, player.y + 7.5, player.z - fz * 16);
@@ -216,6 +226,12 @@ async function main(saved = {}) {
   snapCamera();
   const tmp = new THREE.Vector3();
   function updateCamera(dt) {
+    {
+      const spinning = Math.abs(player.spin || 0) > 0.8 || Math.abs(player.roll || 0) > 0.45;
+      const target = spinning && player.groundSpeed > 3 ? Math.atan2(player.vx, player.vz) : player.heading;
+      const d = Math.atan2(Math.sin(target - (player.camHeading ?? target)), Math.cos(target - (player.camHeading ?? target)));
+      player.camHeading = (player.camHeading ?? target) + d * Math.min(1, dt * (spinning ? 2.2 : 9));
+    }
     camTarget(tmp);
     if (env.ground && CAM_MODES[camMode] !== 'top') {
       const gy = photoActive() ? (photo?.leveled ? photo.groundAt(tmp.x, tmp.z, player.y + 6, 60) : null) : T(tmp.x, tmp.z);
@@ -231,7 +247,8 @@ async function main(saved = {}) {
       camera.position.y += (Math.random() - 0.5) * shake;
       shake = Math.max(0, shake - dt * 2.5);
     }
-    const fx = Math.sin(player.heading), fz = Math.cos(player.heading);
+    const hd = mode === 'hood' || mode === 'top' ? player.heading : player.camHeading ?? player.heading;
+    const fx = Math.sin(hd), fz = Math.cos(hd);
     if (mode === 'top') {
       camera.up.set(fx, 0, fz);
       look.set(player.x, player.y, player.z);
@@ -262,7 +279,7 @@ async function main(saved = {}) {
   input.on('KeyV', () => { camMode = CAM_MODES.indexOf('orbit'); }); // showcase view of the car
   input.on('KeyM', () => hud.toggleBig());
   input.on('Escape', () => hud.toggleBig(false));
-  input.on('KeyR', () => { placeOnRoad(player.x, player.z, player.heading); afterMove(); });
+  input.on('KeyR', () => { placeOnRoad(player.x, player.z, player.heading); crash.repair(); afterMove(); });
   input.on('KeyP', () => applyMode(mode === 'photo' ? 'classic' : 'photo'));
   input.on('KeyT', () => { traffic.enabled = !traffic.enabled; if (!traffic.enabled) { traffic.clear(); police.reset(); } traffic._seeded = false; });
   input.on('KeyH', () => helpEl.classList.toggle('hidden'));
@@ -357,6 +374,7 @@ async function main(saved = {}) {
       if (impact > 4) shake = Math.min(1.2, impact * 0.08);
       traffic.update(realDt, player, now / 1000);
       police.update(realDt, player);
+      crash.update(realDt, camera, renderer);
     }
     if (mode === 'classic') {
       if (aerial) aerial.update(player.x, player.z);
@@ -396,7 +414,7 @@ async function main(saved = {}) {
   updateHint();
 
   // handle for debugging / automated checks
-  window.__game = { THREE, map, get aerial() { return aerial; }, roads, buildings, world, traffic, police, player, renderer, scene, camera, hud, input, stats, placeOnRoad, afterMove, applyMode, get mode() { return mode; }, get photo() { return photo; }, setCam: (i) => { camMode = i; } };
+  window.__game = { THREE, map, get aerial() { return aerial; }, roads, buildings, world, traffic, police, crash, env, player, renderer, scene, camera, hud, input, stats, placeOnRoad, afterMove, applyMode, get mode() { return mode; }, get photo() { return photo; }, setCam: (i) => { camMode = i; } };
 }
 
 function boot(saved) {

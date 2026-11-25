@@ -25,6 +25,18 @@ export const SC430 = {
 };
 
 const G = 9.81;
+const INERTIA = (1742 * (4.515 ** 2 + 1.825 ** 2)) / 12; // yaw moment of inertia (kg m^2), uniform slab
+// body cross-section corners relative to the center of gravity (x = left, y = up): where it touches the
+// ground when it rolls. CG 0.5 m up; 1.825 m wide at the sills, ~1.25 m across the roof, 1.35 m tall.
+const CORNERS = [[0.91, -0.5], [-0.91, -0.5], [0.62, 0.85], [-0.62, 0.85]];
+// CG height above the ground for a roll angle (+ = right side down), and which corner is lowest
+function rollGeometry(roll) {
+  const s = Math.sin(roll), c = Math.cos(roll);
+  let min = Infinity, k = 0;
+  for (let i = 0; i < 4; i++) { const y = CORNERS[i][1] * c - CORNERS[i][0] * s; if (y < min) { min = y; k = i; } }
+  return [-min, k];
+}
+const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const TIRE_R = (18 * 25.4 + 2 * 245 * 0.4) / 2000; // 245/40R18 -> 0.3266 m
 const FRONTAL_AREA = SC430.widthM * SC430.heightM * 0.85; // ~2.09 m^2
 const RHO = 1.225, CRR = 0.012, DRIVELINE = 0.86;
@@ -215,25 +227,32 @@ function buildModel(envMap) {
   const lamp = new THREE.MeshPhysicalMaterial({ color: 0xe9eef2, roughness: 0.05, metalness: 0.1, transmission: 0, envMap, emissive: 0x222222 });
   const tail = new THREE.MeshPhysicalMaterial({ color: 0x8a0a10, roughness: 0.15, envMap, emissive: 0x220000 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x111214, roughness: 0.6, envMap });
+  const lamps = {}, mirrors = {};
   for (const sx of [-1, 1]) {
+    const side = sx > 0 ? 'L' : 'R'; // local +x is the car's left
     const hl = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12).scale(1.25, 0.42, 0.55), lamp);
+    lamps['head' + side] = hl;
     hl.position.set(sx * 0.56, 0.63, L2 - 0.3);
     hl.rotation.y = sx * -0.5;
     group.add(hl);
     const tl = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12).scale(1.05, 0.45, 0.35), tail);
+    lamps['tail' + side] = tl;
     tl.position.set(sx * 0.6, 0.8, -L2 + 0.2);
     tl.rotation.y = sx * 0.55;
     group.add(tl);
     const mirror = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 8).scale(1.1, 0.7, 1.3), new THREE.MeshPhysicalMaterial({ color: 0xa3101b, metalness: 0.12, roughness: 0.38, clearcoat: 1, envMap, envMapIntensity: 0.55 }));
     mirror.position.set(sx * 0.95, 1.04, 0.46);
     group.add(mirror);
+    mirrors['mirror' + side] = mirror;
   }
   const grille = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 10).scale(1.5, 0.45, 0.25), dark);
   grille.position.set(0, 0.47, L2 - 0.03);
   group.add(grille);
+  lamps.grille = grille;
   const brakeLights = new THREE.MeshBasicMaterial({ color: 0x3a0306 });
   for (const sx of [-1, 1]) {
     const bl = new THREE.Mesh(new THREE.CircleGeometry(0.07, 12), brakeLights);
+    lamps['brake' + (sx > 0 ? 'L' : 'R')] = bl;
     bl.position.set(sx * 0.6, 0.8, -L2 + 0.05);
     bl.rotation.y = Math.PI;
     group.add(bl);
@@ -284,7 +303,7 @@ function buildModel(envMap) {
     group.add(pivot);
     wheels.push({ pivot, spin, front: sz > 0 });
   }
-  return { group, wheels, brakeLights };
+  return { group, wheels, brakeLights, parts: { body, cabin: cabinMesh, lamps, mirrors, wheels } };
 }
 
 // Simple outdoor reflection environment: blue sky overhead, bright horizon, gray ground below.
@@ -345,6 +364,19 @@ export class PlayerCar {
     this.impact = 0;
     this.bodyRoll = 0; this.bodyPitch = 0;
     this.offRoad = false;
+    this.parts = model.parts;
+    this.dmg = { power: 1, drag: 1, pull: 0, grip: 1, wobble: 0 }; // set by the damage model (crash.js)
+    this.resetCrashState();
+  }
+
+  // spin, rollover and jolt state
+  resetCrashState() {
+    this.spin = 0; // extra yaw rate from impacts (rad/s, + = heading increasing)
+    this.headingRate = 0;
+    this.roll = 0; this.rollRate = 0; this.lift = 0; this.lowCorner = 0;
+    this.jPitch = 0; this.jPitchRate = 0; this.jRoll = 0; this.jRollRate = 0;
+    this.tripped = false; this.flipped = false; this.flipT = 0;
+    this.contacts = [];
   }
 
   setTune(name) {
@@ -356,6 +388,8 @@ export class PlayerCar {
     this.x = x; this.z = z; this.heading = heading;
     this.vx = this.vz = 0; this.steer = 0; this.speed = 0; this.groundSpeed = 0;
     this.gear = 1; this.rpm = IDLE; this.accel = 0;
+    this.camHeading = heading;
+    if (this.resetCrashState) this.resetCrashState();
     this.sync();
   }
 
@@ -373,10 +407,13 @@ export class PlayerCar {
     const m = SC430.massKg;
 
     this.onRoadIdx = env.roads.roadAt(this.x, this.z);
+    const wasOff = this.offRoad;
     this.offRoad = this.onRoadIdx === null;
-    const T = this.tune;
-    const mu = this.offRoad ? 0.65 : T.mu;
-    let throttle = input.throttle, brake = input.brake;
+    const T = this.tune, D = this.dmg;
+    const mu = (this.offRoad ? 0.65 : T.mu) * D.grip;
+    // up on two wheels or more: no traction, no steering
+    const rolled = Math.abs(this.roll) > 0.45;
+    let throttle = rolled ? 0 : input.throttle, brake = rolled ? 0 : input.brake;
 
     // Gear selection: S held at a standstill selects reverse; W selects drive again.
     if (this.gear > 0 && brake > 0 && !throttle && vf < 0.4) this.gear = -1;
@@ -402,12 +439,13 @@ export class PlayerCar {
     const limited = this.gear > 0 && T.limiterMph && vf >= T.limiterMph * MPH;
     if (throttle > 0 && engineRpm < T.revLimit && !limited) {
       const shiftCut = this.shiftTimer > 0 ? 0.35 : 1;
-      driveForce = (engineTorque(Math.min(engineRpm, FUEL_CUT)) * T.powerMult * throttle * tcMult * total * DRIVELINE * shiftCut) / TIRE_R;
-    } else if (!throttle && lockedRpm > IDLE * 1.2) {
-      // engine braking (closed throttle)
-      driveForce = -((25 + 0.006 * lockedRpm) * total * DRIVELINE) / TIRE_R;
+      driveForce = (engineTorque(Math.min(engineRpm, FUEL_CUT)) * T.powerMult * D.power * throttle * tcMult * total * DRIVELINE * shiftCut) / TIRE_R;
     }
     if (this.gear < 0) driveForce = -driveForce;
+    if (!throttle && lockedRpm > IDLE * 1.2) {
+      // engine braking (closed throttle) always opposes the way the wheels are turning
+      driveForce = -Math.sign(vf) * ((25 + 0.006 * lockedRpm) * total * DRIVELINE) / TIRE_R;
+    }
 
     // rear-wheel-drive traction limit with longitudinal load transfer (TRAC)
     const rearLoad = m * G * REAR_STATIC + (m * this.accel * CG_H) / SC430.wheelbaseM;
@@ -417,7 +455,7 @@ export class PlayerCar {
     // brakes (4-wheel discs + ABS): up to ~1 g on dry pavement
     let brakeForce = brake * mu * m * G * 0.98;
     if (input.handbrake) brakeForce = Math.max(brakeForce, mu * m * G * 0.45);
-    const aero = 0.5 * RHO * SC430.cd * FRONTAL_AREA * vf * vf;
+    const aero = 0.5 * RHO * SC430.cd * D.drag * FRONTAL_AREA * vf * vf;
     const rolling = CRR * m * G * (this.offRoad ? 4 : 1);
     // automatic in gear with no throttle: torque-converter creep holds the car on gentle slopes (~7%)
     // when nearly stopped; steeper hills still roll it back
@@ -446,28 +484,58 @@ export class PlayerCar {
     }
 
     // ----- steering & lateral grip -----
-    this.steer += (input.steer - this.steer) * Math.min(1, dt * T.steerRate);
+    // damage: a bent suspension pulls to one side, a bent wheel shimmies
+    const steerIn = input.steer + D.pull + (D.wobble ? D.wobble * 0.06 * Math.sin(performance.now() * 0.013) * Math.min(1, Math.abs(vf) / 10) : 0);
+    this.steer += (steerIn - this.steer) * Math.min(1, dt * T.steerRate);
     const absV = Math.abs(vf);
     const steerAngle = (this.steer * T.maxSteer) / (1 + Math.max(0, absV - 5) / T.steerFalloff); // full lock at parking speeds, less at highway speeds (keyboard steering)
     let yaw = (vf / SC430.wheelbaseM) * Math.tan(steerAngle);
     const latMax = (input.handbrake ? T.latG * 1.45 : T.latG) * mu * G; // cornering grip
     const maxYaw = Math.min(2.5, latMax / Math.max(absV, 0.5));
     yaw = Math.max(-maxYaw, Math.min(maxYaw, yaw));
-    this.heading -= yaw * dt;
-    const grip = input.handbrake ? 1.4 : this.offRoad ? 5 : 10;
-    const scrub = Math.abs(vl) * (input.handbrake ? 0.25 : 0.6) * dt;
-    vl *= Math.exp(-grip * dt);
-    vf = Math.sign(vf) * Math.max(0, Math.abs(vf) - scrub);
+    // skidding (knocked sideways or spun): tires slide, steering barely bites
+    const sliding = Math.abs(vl) > 3 || Math.abs(this.spin) > 0.9;
+    if (rolled) yaw = 0;
+    else if (sliding) yaw *= 0.35;
+    this.heading -= yaw * dt; // the velocity turns with steering (tires gripping)...
+    if (rolled) {
+      // sliding on its side / roof: body friction, no tires
+      const sp = Math.hypot(vf, vl), dec = Math.min(sp, 0.55 * G * dt);
+      if (sp > 0) { vf -= (vf / sp) * dec; vl -= (vl / sp) * dec; }
+    } else if (sliding && !input.handbrake) {
+      // tires skidding sideways: friction-limited, so a hard shove carries you for a while
+      vl = Math.sign(vl) * Math.max(0, Math.abs(vl) - mu * G * 0.85 * dt);
+      vf = Math.sign(vf) * Math.max(0, Math.abs(vf) - mu * G * 0.2 * dt * Math.min(1, Math.abs(vl) / 4));
+    } else {
+      const grip = input.handbrake ? 1.4 : this.offRoad ? 5 : 10;
+      const scrub = Math.abs(vl) * (input.handbrake ? 0.25 : 0.6) * dt;
+      vl *= Math.exp(-grip * dt);
+      vf = Math.sign(vf) * Math.max(0, Math.abs(vf) - scrub);
+    }
 
     const nfx = Math.sin(this.heading), nfz = Math.cos(this.heading);
     const nrx = -Math.cos(this.heading), nrz = Math.sin(this.heading);
     this.vx = nfx * vf + nrx * vl;
     this.vz = nfz * vf + nrz * vl;
+    // ...but a spin from an impact turns the body without turning the velocity (it skids)
+    this.heading += this.spin * dt;
+    this.headingRate = this.spin - yaw;
+    const spinFriction = rolled ? 1.6 : sliding ? 2.4 : 5.5; // tires resist the rotation
+    this.spin -= Math.sign(this.spin) * Math.min(Math.abs(this.spin), spinFriction * dt);
     this.x += this.vx * dt;
     this.z += this.vz * dt;
     this.speed = vf;
 
-    this.collide(env);
+    // sliding sideways off the pavement at speed digs in and trips the car: rollover
+    if (!rolled && Math.abs(vl) > 9 && (this.offRoad || wasOff !== this.offRoad) && !this.tripped) {
+      this.tripped = true;
+      this.rollRate += Math.sign(vl) * (Math.abs(vl) - 7) * 0.3;
+      this.vy = (this.vy || 0) + 1.2;
+    }
+    if (Math.abs(vl) < 4) this.tripped = false;
+    this.stepBody(dt, env);
+
+    this.collide(env, dt);
     const b = env.bounds, pad = 150;
     this.x = Math.max(b.minX - pad, Math.min(b.maxX + pad, this.x));
     this.z = Math.max(b.minZ - pad, Math.min(b.maxZ + pad, this.z));
@@ -500,44 +568,142 @@ export class PlayerCar {
     this.sync();
   }
 
-  collide(env) {
+  // Rigid-body impulse at a contact point against something solid (n = unit normal pushing the car
+  // out, e = restitution, muC = friction along the surface). Returns the closing speed (0 if separating).
+  contact(nx, nz, cx, cz, e, muC) {
+    const m = SC430.massKg;
+    const rx = cx - this.x, rz = cz - this.z;
+    const px = rz, pz = -rx; // how the contact point moves per unit of heading rate
+    const w = this.headingRate || 0;
+    const vcx = this.vx + w * px, vcz = this.vz + w * pz;
+    const vn = vcx * nx + vcz * nz;
+    if (vn >= 0) return { impact: 0, vt: 0 };
+    const rn = px * nx + pz * nz;
+    // crumple zones soak up hard hits: the faster the impact, the less it bounces back
+    const eff = e * Math.exp(vn / 14) + 0.04;
+    const J = (-(1 + eff) * vn) / (1 / m + (rn * rn) / INERTIA);
+    const tx = -nz, tz = nx;
+    const vt = vcx * tx + vcz * tz, rt = px * tx + pz * tz;
+    const Jt = Math.max(-muC * J, Math.min(muC * J, -vt / (1 / m + (rt * rt) / INERTIA)));
+    const ix = J * nx + Jt * tx, iz = J * nz + Jt * tz;
+    this.applyImpulse(ix, iz, px, pz);
+    return { impact: -vn, vt };
+  }
+
+  // linear + angular impulse (ix, iz) at a point whose rotation lever is (px, pz); body jolt and tripping
+  applyImpulse(ix, iz, px, pz) {
+    const m = SC430.massKg;
+    const dvx = ix / m, dvz = iz / m;
+    this.vx += dvx; this.vz += dvz;
+    this.spin = Math.max(-6, Math.min(6, this.spin + (ix * px + iz * pz) / INERTIA));
+    const fx = Math.sin(this.heading), fz = Math.cos(this.heading), rx = -Math.cos(this.heading), rz = Math.sin(this.heading);
+    const dvf = dvx * fx + dvz * fz, dvl = dvx * rx + dvz * rz;
+    // the body pitches / rolls with the hit
+    this.jPitchRate = Math.max(-5, Math.min(5, this.jPitchRate - dvf * 0.11));
+    this.jRollRate = Math.max(-5, Math.min(5, this.jRollRate + dvl * 0.09));
+    // a hard enough shove sideways trips the car over
+    if (Math.abs(dvl) > 8) this.rollRate += Math.sign(dvl) * (Math.abs(dvl) - 7) * 0.22;
+    if (Math.hypot(dvx, dvz) > 6) this.vy = Math.max(this.vy || 0, Math.min(2.5, Math.hypot(dvx, dvz) * 0.12));
+  }
+
+  // body roll (rollovers) and the jolt springs
+  stepBody(dt, env) {
+    // jolts: stiff, damped springs back to level
+    this.jPitchRate += (-110 * this.jPitch - 12 * this.jPitchRate) * dt;
+    this.jPitch += this.jPitchRate * dt;
+    this.jRollRate += (-110 * this.jRoll - 12 * this.jRollRate) * dt;
+    this.jRoll += this.jRollRate * dt;
+    // rollover: gravity torque about whichever corner is on the ground (from the body's shape)
+    if (Math.abs(this.roll) < 0.04 && Math.abs(this.rollRate) < 0.6) {
+      this.rollRate += (-80 * this.roll - 12 * this.rollRate) * dt; // on its wheels: suspension
+    } else {
+      const e = 0.01, dh = (rollGeometry(this.roll + e)[0] - rollGeometry(this.roll - e)[0]) / (2 * e);
+      this.rollRate += (-(G * dh) / 1.1 - 0.35 * this.rollRate) * dt;
+    }
+    const before = this.lowCorner, fast = Math.abs(this.rollRate);
+    this.roll = wrapPi(this.roll + this.rollRate * dt);
+    const [h, k] = rollGeometry(this.roll);
+    this.lowCorner = k;
+    if (k !== before && Math.abs(this.roll) > 0.3) {
+      // a new corner slams into the ground: energy lost, damage, sparks
+      this.rollRate *= 0.62;
+      if (fast > 1.2) env.crash?.rollHit(fast);
+    }
+    this.lift = h - CG_H;
+    // resting on its side or roof?
+    this.flipT = Math.abs(this.roll) > 0.6 && Math.abs(this.rollRate) < 0.25 && this.groundSpeed < 1 ? this.flipT + dt : 0;
+    if (this.flipT > 1.2 && !this.flipped) { this.flipped = true; env.onFlipped?.(); }
+    if (Math.abs(this.roll) < 0.1) this.flipped = false;
+  }
+
+  collide(env, dt = 1 / 120) {
     const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
     let hitSpeed = 0;
-    const bounce = (nx, nz, restitution) => {
-      const vn = this.vx * nx + this.vz * nz;
-      if (vn < 0) {
-        this.vx -= (1 + restitution) * vn * nx;
-        this.vz -= (1 + restitution) * vn * nz;
-        this.vx *= 0.92; this.vz *= 0.92;
-        hitSpeed = Math.max(hitSpeed, -vn);
-      }
+    const R = 0.9;
+    const hit = (nx, nz, cx, cz, e, muC, kind) => {
+      const c = this.contact(nx, nz, cx, cz, e, muC);
+      if (c.impact > 1.2) env.crash?.impact({ x: cx, z: cz, nx, nz, impact: c.impact, kind });
+      else if (Math.abs(c.vt) > 3) env.crash?.scrape(cx, cz, nx, nz, Math.abs(c.vt), dt);
+      hitSpeed = Math.max(hitSpeed, c.impact);
     };
-    for (const off of [1.3, -1.3]) {
+    for (const off of [1.45, 0, -1.45]) {
       const cx = this.x + fx * off, cz = this.z + fz * off;
-      const r = 0.95;
-      const res = env.buildings.resolveCircle(cx, cz, r);
-      if (res.hit) { this.x += res.x - cx; this.z += res.z - cz; bounce(res.nx, res.nz, 0.25); }
-      if (env.trees) env.trees.forNear(cx, cz, r + 1, (i) => {
+      const res = env.buildings.resolveCircle(cx, cz, R);
+      if (res.hit) {
+        this.x += res.x - cx; this.z += res.z - cz;
+        hit(res.nx, res.nz, res.x - res.nx * R, res.z - res.nz * R, 0.3, 0.45, 'wall');
+      }
+      if (env.trees) env.trees.forNear(cx, cz, R + 1, (i) => {
         const tx = env.trees.xs[i], tz = env.trees.zs[i], tr = env.trees.rs[i];
-        const dx = cx - tx, dz = cz - tz, d = Math.hypot(dx, dz), min = r + tr;
-        if (d < min && d > 1e-4) { const nx = dx / d, nz = dz / d; this.x += nx * (min - d); this.z += nz * (min - d); bounce(nx, nz, 0.2); }
+        const dx = cx - tx, dz = cz - tz, d = Math.hypot(dx, dz), min = R + tr;
+        if (d < min && d > 1e-4) {
+          const nx = dx / d, nz = dz / d;
+          this.x += nx * (min - d); this.z += nz * (min - d);
+          hit(nx, nz, tx + nx * tr, tz + nz * tr, 0.2, 0.5, 'tree');
+        }
+      });
+      // poles: signal masts are rigid; streetlights and sign posts break away at speed
+      if (env.poles) env.poles.forNear(cx, cz, R + 0.5, (ob) => {
+        const dx = cx - ob.x, dz = cz - ob.z, d = Math.hypot(dx, dz), min = R + ob.r;
+        if (d >= min || d < 1e-4) return;
+        const nx = dx / d, nz = dz / d;
+        const vn = -(this.vx * nx + this.vz * nz);
+        if (ob.breakable && vn > (ob.kind === 'light' ? 3.5 : 1.8)) {
+          // snaps off: costs some speed (the base is designed to shear), the pole falls the way you're going
+          const absorb = Math.min(vn, ob.kind === 'light' ? 3.2 : 1.2);
+          this.applyImpulse(nx * absorb * SC430.massKg, nz * absorb * SC430.massKg, (ob.z + nz * ob.r - this.z), -(ob.x + nx * ob.r - this.x));
+          env.poles.knock(ob, this.vx, this.vz, vn);
+          env.crash?.impact({ x: ob.x, z: ob.z, nx, nz, impact: absorb + 1.5, kind: 'pole' });
+          return;
+        }
+        this.x += nx * (min - d); this.z += nz * (min - d);
+        hit(nx, nz, ob.x + nx * ob.r, ob.z + nz * ob.r, 0.25, 0.4, 'pole');
       });
     }
     if (env.traffic) {
-      const hit = env.traffic.collidePlayer(this);
-      if (hit) {
-        // momentum exchange with the other vehicle (computed by traffic from both masses)
-        this.vx += hit.dvx; this.vz += hit.dvz;
-        this.x += hit.nx * hit.pen; this.z += hit.nz * hit.pen;
-        hitSpeed = Math.max(hitSpeed, hit.impact);
+      const t = env.traffic.collidePlayer(this);
+      if (t) {
+        // momentum exchange with the other vehicle (impulse computed by traffic from both masses),
+        // applied at the contact point so off-center hits spin you
+        this.x += t.nx * t.pen; this.z += t.nz * t.pen;
+        if (t.J > 0) {
+          const rx = t.pcx - this.x, rz = t.pcz - this.z;
+          this.applyImpulse(t.J * t.nx, t.J * t.nz, rz, -rx);
+          if (t.impact > 1.2) env.crash?.impact({ x: t.pcx, z: t.pcz, nx: t.nx, nz: t.nz, impact: t.impact, kind: 'car' });
+        }
+        hitSpeed = Math.max(hitSpeed, t.impact);
       }
     }
     this.impact = hitSpeed;
   }
 
   sync() {
-    this.group.position.set(this.x, this.y, this.z);
-    this.group.rotation.set(this.bodyPitch + (this.slopePitch || 0), this.heading, this.bodyRoll, 'YXZ');
+    // rolled over: the model pivots at ground level, so shift it to keep the center of gravity where the
+    // physics has it (CG 0.5 m up, lowest corner on the ground)
+    const ro = this.roll || 0, sr = Math.sin(ro);
+    const side = CG_H * sr, lift = (this.lift || 0) + CG_H * (1 - Math.cos(ro));
+    this.group.position.set(this.x + Math.cos(this.heading) * side, this.y + lift, this.z - Math.sin(this.heading) * side);
+    this.group.rotation.set(this.bodyPitch + (this.slopePitch || 0) + (this.jPitch || 0), this.heading, this.bodyRoll + (this.jRoll || 0) + (this.roll || 0), 'YXZ');
     for (const w of this.wheels) {
       w.spin.rotation.x = this.wheelSpin;
       w.pivot.rotation.y = w.front ? -this.steer * 0.45 : 0;
