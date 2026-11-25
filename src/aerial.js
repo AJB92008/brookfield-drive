@@ -1,7 +1,7 @@
 // Streams the stylized ground (classified from USDA NAIP aerial photos) for classic mode: one low-res
 // overview for the whole map plus 500 m tiles around the player, draped on the real terrain grid.
 import * as THREE from 'three';
-import { T, terrainGrid } from './terrain.js';
+import { T, terrainGrid, groundMinIn } from './terrain.js';
 
 const NEAR = 1500; // load full tiles whose center is within this distance (fog ends ~1.5 km)
 const FAR = 1900; // and drop them beyond this one
@@ -105,7 +105,13 @@ export class AerialGround {
     const sx = Math.max(1, Math.round(segs)), sz = Math.max(1, Math.round((segs * h) / w));
     const geo = new THREE.PlaneGeometry(w, h, sx, sz).rotateX(-Math.PI / 2).translate((ext.minX + ext.maxX) / 2, 0, (ext.minZ + ext.maxZ) / 2);
     const p = geo.attributes.position;
-    for (let i = 0; i < p.count; i++) p.setY(i, T(p.getX(i), p.getZ(i)) + y);
+    // coarse: each vertex takes the lowest ground in the cells around it, so the mesh can't rise above
+    // the real ground (or a road) anywhere in between - see terrain.js groundMinIn
+    const cw = w / sx, ch = h / sz;
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), z = p.getZ(i);
+      p.setY(i, (terrainGrid() ? groundMinIn(x - cw, z - ch, x + cw, z + ch) : T(x, z)) + y);
+    }
     geo.computeVertexNormals();
     // PlaneGeometry UV v=1 is at -z after rotation, i.e. north edge = top of the image. Matches.
     const mat = makeGroundMaterial(tex);

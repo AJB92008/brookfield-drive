@@ -104,6 +104,59 @@ let terrainMeta = null;
 // raw grid access for building meshes on the exact grid points (null when no terrain)
 export const terrainGrid = () => terrainMeta;
 
+// Sidewalk quads (shared by furniture.js and the audit): a polyline is split every 4 m into 1.6 m-wide
+// quads that overlap 0.4 m at each end, with corners on the drawn ground. The ground can crease under a
+// quad (it sits right beside carved road beds), so each quad is lifted just enough to clear the ground,
+// checked on a 3 x 9 lattice that includes its edges. Calls fn(corners[4][2], baseHeights[4]).
+export const SIDEWALK_STATION = 4;
+export function sidewalkQuads(raw, fn) {
+  const p = [];
+  for (let k = 0; k < raw.length; k += 2) {
+    if (k > 0) {
+      const ax = raw[k - 2], az = raw[k - 1], bx = raw[k], bz = raw[k + 1];
+      const steps = Math.floor(Math.hypot(bx - ax, bz - az) / SIDEWALK_STATION);
+      for (let j = 1; j <= steps; j++) { const t = j / (steps + 1); p.push(ax + (bx - ax) * t, az + (bz - az) * t); }
+    }
+    p.push(raw[k], raw[k + 1]);
+  }
+  for (let k = 0; k + 3 < p.length; k += 2) {
+    const ax = p[k], az = p[k + 1], bx = p[k + 2], bz = p[k + 3];
+    const L = Math.hypot(bx - ax, bz - az);
+    if (L < 0.05) continue;
+    const nx = (-(bz - az) / L) * 0.8, nz = ((bx - ax) / L) * 0.8;
+    // extend slightly past each end so consecutive segments overlap at bends
+    const ex = ((bx - ax) / L) * 0.4, ez = ((bz - az) / L) * 0.4;
+    const q = [[ax - ex + nx, az - ez + nz], [bx + ex + nx, bz + ez + nz], [bx + ex - nx, bz + ez - nz], [ax - ex - nx, az - ez - nz]];
+    const h = q.map(([x, z]) => T(x, z));
+    let lift = 0;
+    for (let i = 0; i <= 8; i++) {
+      for (let j = 0; j <= 2; j++) {
+        const u = i / 8, v = j / 2; // u along (corner 0 -> 1), v across (0 -> 3)
+        const x = (q[0][0] * (1 - u) + q[1][0] * u) * (1 - v) + (q[3][0] * (1 - u) + q[2][0] * u) * v;
+        const z = (q[0][1] * (1 - u) + q[1][1] * u) * (1 - v) + (q[3][1] * (1 - u) + q[2][1] * u) * v;
+        // drawn as triangles (0,1,2) + (0,2,3): planar height at (u,v) in that split
+        const sh = u >= v ? h[0] + (h[1] - h[0]) * (u - v) + (h[2] - h[0]) * v : h[0] + (h[2] - h[0]) * u + (h[3] - h[0]) * (v - u);
+        lift = Math.max(lift, T(x, z) - sh);
+      }
+    }
+    fn(q, h.map((v) => v + lift));
+  }
+}
+
+// Lowest drawn-ground height over a box (all grid points of the cells it touches). Coarse meshes (the
+// distant overview, the fallback plane) take this over the cells around each vertex, so every point
+// of a coarse cell sits below every vertex's minimum, i.e. below the real ground (and every road).
+export function groundMinIn(x0, z0, x1, z1, meta = terrainMeta) {
+  if (!meta) return T((x0 + x1) / 2, (z0 + z1) / 2);
+  const { step, minX, minZ, cols, rows, ground } = meta;
+  const cl = (v, n) => Math.max(0, Math.min(n - 1, v));
+  const c0 = cl(Math.floor((x0 - minX) / step), cols), c1 = cl(Math.ceil((x1 - minX) / step), cols);
+  const r0 = cl(Math.floor((z0 - minZ) / step), rows), r1 = cl(Math.ceil((z1 - minZ) / step), rows);
+  let lo = Infinity;
+  for (let r = r0; r <= r1; r++) for (let c = c0, i = r * cols + c0; c <= c1; c++, i++) if (ground[i] < lo) lo = ground[i];
+  return lo;
+}
+
 export async function loadTerrain(map, base = import.meta.env?.BASE_URL ?? '/') {
   const m = map.terrain;
   if (!m) return null;
@@ -124,7 +177,9 @@ export async function loadTerrain(map, base = import.meta.env?.BASE_URL ?? '/') 
   const off = m.minH - m.base;
   const orig = new Float32Array(grid.length);
   for (let i = 0; i < grid.length; i++) orig[i] = grid[i] * m.scale + off;
+  const t0 = performance.now();
   const ground = carveRoadBeds(orig, m, map.nodes, map.roads);
+  console.log(`[brookfield] road beds carved in ${(performance.now() - t0).toFixed(0)} ms`);
   setTerrain((x, z) => sampleGrid(ground, m, x, z), (x, z) => sampleGrid(orig, m, x, z));
   terrainMeta = { ...m, ground };
   return { min: off };

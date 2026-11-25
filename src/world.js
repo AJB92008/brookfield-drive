@@ -4,7 +4,7 @@ import { makeDetailTexture, makeAsphaltTexture } from './textures.js';
 import { Grid, pointInRing, PointIndex } from './spatial.js';
 import { buildBuildings as buildDetailedBuildings } from './buildings.js';
 import { buildFurniture } from './furniture.js';
-import { T, Troad, ROAD_STATION, isMinorRoad } from './terrain.js';
+import { T, Troad, ROAD_STATION, isMinorRoad, groundMinIn } from './terrain.js';
 import { buildSigns, assignPois } from './signs.js';
 
 const TILE = 500; // meters; static geometry is merged per tile so frustum culling works
@@ -703,9 +703,12 @@ export async function buildWorld(map, roadIndex, bindex, scene, progress = async
   const groundGeo = new THREE.PlaneGeometry(gw, gh, 180, 180).rotateX(-Math.PI / 2).translate((b.minX + b.maxX) / 2, 0, (b.minZ + b.maxZ) / 2);
   const gpos = groundGeo.attributes.position;
   const guv = groundGeo.attributes.uv;
+  const gcw = gw / 180, gch = gh / 180;
   for (let i = 0; i < gpos.count; i++) {
-    guv.setXY(i, gpos.getX(i) / 11, gpos.getZ(i) / 11);
-    gpos.setY(i, T(gpos.getX(i), gpos.getZ(i)) - 4); // fallback ground (outside the map), far below the real ground
+    const x = gpos.getX(i), z = gpos.getZ(i);
+    guv.setXY(i, x / 11, z / 11);
+    // fallback ground (outside the map): lowest ground around each vertex, minus 4 m, so it stays hidden
+    gpos.setY(i, groundMinIn(x - gcw, z - gch, x + gcw, z + gch) - 4);
   }
   groundGeo.computeVertexNormals();
   const ground = new THREE.Mesh(groundGeo, mats.ground);

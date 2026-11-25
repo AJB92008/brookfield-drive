@@ -2,7 +2,7 @@
 // streetlights, street-name blades, sidewalks. Positions come pre-computed in map.furniture.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { T, Troad } from './terrain.js';
+import { T, Troad, sidewalkQuads } from './terrain.js';
 
 const Y_SIDEWALK = 0.055, Y_XWALK = 0.1;
 export const SIGNAL_CYCLE = 34; // s: phase 0 green 0-13, yellow 13-16, all-red 16-17, phase 1 green 17-30, yellow 30-33, all-red 33-34
@@ -229,6 +229,9 @@ export function buildFurniture(map, group) {
   const quad = (pts, y, col, base = null) => {
     for (const k of [0, 1, 2, 0, 2, 3]) { flatPos.push(pts[k][0], y + 0.15 + (base ?? T(pts[k][0], pts[k][1])), pts[k][1]); flatCol.push(col.r, col.g, col.b); }
   };
+  const quadH = (pts, hs, y, col) => {
+    for (const k of [0, 1, 2, 0, 2, 3]) { flatPos.push(pts[k][0], y + 0.15 + hs[k], pts[k][1]); flatCol.push(col.r, col.g, col.b); }
+  };
   for (let i = 0; i < f.crosswalks.length; i += 5) {
     const [x, z, dx, dz, w] = f.crosswalks.slice(i, i + 5);
     const px = -dz, pz = dx; // across the road
@@ -241,26 +244,7 @@ export function buildFurniture(map, group) {
       quad([c0, c1, c2, c3], Y_XWALK, white, Troad(x, z));
     }
   }
-  for (const raw of f.sidewalks) {
-    const p = [];
-    for (let k = 0; k < raw.length; k += 2) {
-      if (k > 0) {
-        const ax = raw[k - 2], az = raw[k - 1], bx = raw[k], bz = raw[k + 1];
-        const steps = Math.floor(Math.hypot(bx - ax, bz - az) / 8);
-        for (let j = 1; j <= steps; j++) { const t = j / (steps + 1); p.push(ax + (bx - ax) * t, az + (bz - az) * t); }
-      }
-      p.push(raw[k], raw[k + 1]);
-    }
-    for (let k = 0; k + 3 < p.length; k += 2) {
-      const ax = p[k], az = p[k + 1], bx = p[k + 2], bz = p[k + 3];
-      const L = Math.hypot(bx - ax, bz - az);
-      if (L < 0.05) continue;
-      const nx = (-(bz - az) / L) * 0.8, nz = ((bx - ax) / L) * 0.8;
-      // extend slightly past each end so consecutive segments overlap at bends
-      const ex = ((bx - ax) / L) * 0.4, ez = ((bz - az) / L) * 0.4;
-      quad([[ax - ex + nx, az - ez + nz], [bx + ex + nx, bz + ez + nz], [bx + ex - nx, bz + ez - nz], [ax - ex - nx, az - ez - nz]], Y_SIDEWALK, concrete);
-    }
-  }
+  for (const raw of f.sidewalks) sidewalkQuads(raw, (q, hs) => quadH(q, hs, Y_SIDEWALK, concrete));
   if (flatPos.length) {
     const fg = new THREE.BufferGeometry();
     // make every triangle face up
