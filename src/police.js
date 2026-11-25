@@ -68,7 +68,7 @@ export class Police {
     }
     const mph = (player.groundSpeed ?? Math.abs(player.speed)) * TO_MPH;
     this.cool -= dt;
-    if (!this.wanted) {
+    if (!this.wanted && !this.suspended) {
       const over = this.limit !== null ? mph - this.limit : 0;
       this.speedT = over >= 15 ? this.speedT + dt : Math.max(0, this.speedT - dt);
       const cop = this.nearestCop(player.x, player.z);

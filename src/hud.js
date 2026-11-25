@@ -236,6 +236,24 @@ export class Hud {
     const px = (player.x - b.minX) / MPP, pz = (player.z - b.minZ) / MPP;
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(this.base, -px, -pz);
+    if (this.route) {
+      // mission route (world -> rotated minimap space is (x - player) / MPP)
+      const r = this.route, pts = r.pts, col = `#${r.color.toString(16).padStart(6, '0')}`;
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      for (const [w, c2] of [[7, 'rgba(0,0,0,0.55)'], [4, col]]) {
+        ctx.strokeStyle = c2;
+        ctx.lineWidth = (w * this.miniDpr) / k;
+        ctx.beginPath();
+        for (let i = 0; i < pts.length; i += 2) {
+          const x = (pts[i] - player.x) / MPP, z = (pts[i + 1] - player.z) / MPP;
+          if (i === 0) ctx.moveTo(x, z); else ctx.lineTo(x, z);
+        }
+        ctx.stroke();
+      }
+      const [dx, dz] = r.dest;
+      ctx.fillStyle = col; ctx.strokeStyle = '#fff'; ctx.lineWidth = (2 * this.miniDpr) / k;
+      ctx.beginPath(); ctx.arc((dx - player.x) / MPP, (dz - player.z) / MPP, (7 * this.miniDpr) / k, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
     if (traffic?.enabled) {
       ctx.fillStyle = '#7fd3ff';
       const dotR = 2.2 / k * this.miniDpr;
@@ -301,6 +319,22 @@ export class Hud {
     const x = ((player.x - b.minX) / (b.maxX - b.minX)) * this.big.width;
     const y = ((player.z - b.minZ) / (b.maxZ - b.minZ)) * this.big.height;
     const a = 11 * (this.big.width / parseFloat(this.big.style.width));
+    if (this.route) {
+      const sxF = this.big.width / (b.maxX - b.minX), szF = this.big.height / (b.maxZ - b.minZ);
+      const r = this.route, pts = r.pts, col = `#${r.color.toString(16).padStart(6, '0')}`;
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      for (const [w, c2] of [[a * 0.55, 'rgba(0,0,0,0.55)'], [a * 0.32, col]]) {
+        ctx.strokeStyle = c2; ctx.lineWidth = w;
+        ctx.beginPath();
+        for (let i = 0; i < pts.length; i += 2) {
+          const px = (pts[i] - b.minX) * sxF, pz = (pts[i + 1] - b.minZ) * szF;
+          if (i === 0) ctx.moveTo(px, pz); else ctx.lineTo(px, pz);
+        }
+        ctx.stroke();
+      }
+      ctx.fillStyle = col; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc((r.dest[0] - b.minX) * sxF, (r.dest[1] - b.minZ) * szF, a * 0.7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(Math.PI - player.heading);

@@ -40,13 +40,14 @@ To update the hosted copy after changing the code, run `npm run build:artifact`.
 | V | Showcase camera that circles the car |
 | I | Show the car's spec sheet |
 | K | Switch between the Sport tune (default) and the stock car |
-| M | City map. Click anywhere on it to teleport there |
+| N | Missions: pick one with 1, 2 or a click |
+| M | City map. Click anywhere on it to teleport there (cancels a mission) |
 | R | Put the car back on the nearest road, upright and repaired |
 | T | Turn traffic on or off |
 | P | Switch between the photoreal 3D city and the classic look |
 | H | Show or hide the controls panel |
 
-A gamepad also works: left stick steers, RT is gas, LT is brake, A/B is handbrake, Y changes camera, X resets, Back opens the map.
+A gamepad also works: left stick steers, RT is gas, LT is brake, A/B is handbrake, Y changes camera, X resets, Back opens the map, Start opens missions (d-pad up/down picks one).
 
 ## Traffic and police
 
@@ -122,17 +123,36 @@ npm run audit-ground           # checks that the ground never pokes through a ro
 | `src/car.js` | The contact-shadow texture. |
 | `src/vehicles.js` | AI vehicle types: models, sizes, masses and acceleration, plus the lamp shader for brake lights, turn signals and police lights. |
 | `src/speedlimits.js` | Posted speed limit for every road. |
+| `src/missions.js` | Mission mode: routing on the road graph (Dijkstra by travel time at the speed limits), the destination beacon and on-screen marker, the timer, medals and saved bests. |
 | `src/police.js` | When police chase you, escapes, busts, and the pursuit banner. |
 | `src/crash.js` | Crash effects: sparks, debris, smoke, the damage model (dents, broken parts, effects on driving, HUD meter), and breakaway poles. |
 | `src/terrain.js` | Loads the elevation grid. `T()` is the drawn ground and `Troad()` the original lidar surface that roads follow. `carveRoadBeds()` lowers the ground under roads just enough. |
 | `src/aerial.js` | Streams the stylized ground tiles as meshes on the exact terrain grid, with the crisp-edge shader. |
 | `scripts/stylize-ground.mjs` | Classifies the aerial photos into the ground palette (run by `build-map`; `--skip-ground` skips it). |
 | `src/traffic.js` | AI traffic on the real road graph: IDM driving, junction reservations and right-of-way rules, MOBIL lane changes, junction curves, crashes, and police routing and chasing. |
-| `src/hud.js` | Speedometer, street-name sign with route shields, the town you're in, a rotating minimap, and the full city map. |
+| `src/hud.js` | Speedometer, street-name sign with route shields, the town you're in, a rotating minimap, and the full city map, both with the mission route. |
 | `src/spatial.js` | Grid indexes for road and building lookups. `RoadIndex.surfaceHeight()` gives the drivable height: road surface, bridge deck or ground. |
+
+## Missions
+
+Press **N** and pick a destination. Each mission is a timed run from wherever you are right now:
+
+- **15185 Kings Ridge Ct.** That house isn't in OpenStreetMap, so the finish is the curb on the cul-de-sac bulb next to its mapped neighbors (15165 and 15160).
+- **Brookfield Square.** The mall's west entrance.
+
+How a run works:
+
+- **Start:** a 3-second countdown with the car held still, then the clock runs until you reach the destination.
+- **No other rules.** Speed, run lights, cut through lots. The police leave you alone for the run.
+- **Navigation:**
+  - The route shows on the minimap and the city map. It's the fastest legal route at the speed limits, it respects one-way streets and divided roads, and it updates as you drive, so it follows you if you leave it.
+  - A tall light beam stands over the finish. You can see it from across town, and it grows with distance so it doesn't shrink to nothing.
+  - A label on screen shows the distance; when the finish is off screen, an arrow at the edge points to it.
+- **Medals:** par is the route's time at the speed limits from where you started. Finish in 80% of par or less for gold, par or less for silver, and 130% of par or less for bronze. Because start points differ, your best is the run that beat its par by the most. Bests are saved in your browser.
+- **Ending early:** open the menu to abandon a run. Teleporting from the map cancels it.
 
 ## Ideas for next steps
 
-- **Missions.** Checkpoint races or delivery runs between real places, such as Brookfield Square or the Brookfield East/Central high schools.
+- **More missions.** Checkpoint races or delivery runs to more real places, such as the Brookfield East/Central high schools.
 
 Map data © OpenStreetMap contributors, licensed under the ODbL. The in-game attribution must stay visible.

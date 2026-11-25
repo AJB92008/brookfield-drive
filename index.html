@@ -37,6 +37,17 @@
         <div class="d-text"><b id="damage-pct">0%</b><span>damage</span><span class="d-hint">R repairs</span></div>
       </div>
 
+      <div id="missions" hidden>
+        <div class="ms-title">Missions <span>timed runs from where you are · press N to close</span></div>
+        <div id="missions-list"></div>
+        <button id="missions-abandon" hidden>Abandon current mission</button>
+        <div class="ms-note">Par is the route's time at the speed limits. Gold: 80% of par or less, silver: par, bronze: 130%. No other rules.</div>
+      </div>
+      <div id="mission-hud" hidden></div>
+      <div id="mission-count" hidden></div>
+      <div id="mission-result" hidden></div>
+      <div id="mission-marker" hidden><div class="mm-arrow"></div><div class="mm-dist"></div></div>
+
       <div id="limit-sign" hidden><div class="t">SPEED<br>LIMIT</div><div id="limit-num">25</div></div>
 
       <div id="wanted" hidden>
@@ -79,7 +90,7 @@
         <b>Controls</b>
         <div><kbd>W</kbd><kbd>↑</kbd> gas &nbsp; <kbd>S</kbd><kbd>↓</kbd> brake / reverse</div>
         <div><kbd>A</kbd><kbd>D</kbd><kbd>←</kbd><kbd>→</kbd> steer &nbsp; <kbd>Space</kbd> handbrake</div>
-        <div><kbd>C</kbd> camera &nbsp; <kbd>V</kbd> look at the car &nbsp; <kbd>M</kbd> city map</div>
+        <div><kbd>N</kbd> missions &nbsp; <kbd>C</kbd> camera &nbsp; <kbd>V</kbd> look at the car &nbsp; <kbd>M</kbd> city map</div>
         <div><kbd>R</kbd> back on the road (repairs the car) &nbsp; <kbd>T</kbd> traffic on/off</div>
         <div class="help-note">Police chase you for going 15+ over the limit or crashing near them. Get far away to escape.</div>
         <div><kbd>P</kbd> photoreal 3D city / classic &nbsp; <kbd>I</kbd> car specs &nbsp; <kbd>K</kbd> stock / sport tune</div>

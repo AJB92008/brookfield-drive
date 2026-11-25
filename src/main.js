@@ -5,6 +5,7 @@ import { PlayerCar, tuneSummary } from './sc430.js';
 import { Traffic } from './traffic.js';
 import { Police } from './police.js';
 import { CrashSystem } from './crash.js';
+import { Missions } from './missions.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
 import { AerialGround } from './aerial.js';
@@ -126,7 +127,7 @@ async function main(saved = {}) {
   env.crash = crash;
   env.poles = crash.poles;
   env.onFlipped = () => hud.toast(`Your car is on its ${Math.abs(player.roll) > 2.3 ? 'roof' : 'side'}. Press R to flip it back over (and fix it).`, 6000);
-  hud.onTeleport = (x, z) => { placeOnRoad(x, z, player.heading); afterMove(); };
+  hud.onTeleport = (x, z) => { if (missions.running) missions.abort('Mission cancelled: you teleported.'); placeOnRoad(x, z, player.heading); afterMove(); };
 
   // ---------- photoreal (Google 3D Tiles via Cesium ion) vs classic (built from OSM) ----------
   let mode = 'classic';
@@ -167,6 +168,15 @@ async function main(saved = {}) {
   }
   useClassicGround(); // default until/unless photoreal mode takes over
   const photoActive = () => mode === 'photo';
+  // mission beacon base: the ground at the destination (in the 3D city, the lidar height difference
+  // from the car until those tiles load)
+  const missionGround = (x, z) => {
+    if (!photoActive()) return map.terrain ? classicInit(x, z, false) : 0;
+    const g = groundInitFn(x, z, false);
+    if (g !== null) return g;
+    return map.terrain ? player.y + T(x, z) - T(player.x, player.z) : player.y;
+  };
+  const missions = new Missions({ map, roads, scene, player, hud, police, ground: missionGround });
   let groundPendingSince = 0;
   function afterMove() {
     traffic.clear();
@@ -278,7 +288,10 @@ async function main(saved = {}) {
   input.on('KeyC', () => { camMode = (camMode + 1) % CAM_MODES.length; });
   input.on('KeyV', () => { camMode = CAM_MODES.indexOf('orbit'); }); // showcase view of the car
   input.on('KeyM', () => hud.toggleBig());
-  input.on('Escape', () => hud.toggleBig(false));
+  input.on('Escape', () => { hud.toggleBig(false); missions.toggleMenu(false); });
+  input.on('KeyN', () => missions.toggleMenu());
+  input.on('Digit1', () => { if (!missions.menu.hidden) missions.start(0); });
+  input.on('Digit2', () => { if (!missions.menu.hidden) missions.start(1); });
   input.on('KeyR', () => { placeOnRoad(player.x, player.z, player.heading); crash.repair(); afterMove(); });
   input.on('KeyP', () => applyMode(mode === 'photo' ? 'classic' : 'photo'));
   input.on('KeyT', () => { traffic.enabled = !traffic.enabled; if (!traffic.enabled) { traffic.clear(); police.reset(); } traffic._seeded = false; });
@@ -343,6 +356,7 @@ async function main(saved = {}) {
     const dt = Math.min(0.05, realDt); // for camera/HUD smoothing
     last = now;
     input.poll();
+    if (missions.hold) { input.throttle = 0; input.brake = 0; input.steer = 0; input.handbrake = true; } // mission countdown (brake alone would shift into reverse)
     if (photo && mode === 'photo') {
       photo.update();
       // Calibrate "ground = y 0" once the detailed tiles have finished streaming (coarse tiles are tens of m off).
@@ -375,6 +389,7 @@ async function main(saved = {}) {
       traffic.update(realDt, player, now / 1000);
       police.update(realDt, player);
       crash.update(realDt, camera, renderer);
+      missions.update(realDt, camera, renderer);
     }
     if (mode === 'classic') {
       if (aerial) aerial.update(player.x, player.z);
@@ -414,7 +429,7 @@ async function main(saved = {}) {
   updateHint();
 
   // handle for debugging / automated checks
-  window.__game = { THREE, map, get aerial() { return aerial; }, roads, buildings, world, traffic, police, crash, env, player, renderer, scene, camera, hud, input, stats, placeOnRoad, afterMove, applyMode, get mode() { return mode; }, get photo() { return photo; }, setCam: (i) => { camMode = i; } };
+  window.__game = { THREE, map, get aerial() { return aerial; }, roads, buildings, world, traffic, police, crash, missions, env, player, renderer, scene, camera, hud, input, stats, placeOnRoad, afterMove, applyMode, get mode() { return mode; }, get photo() { return photo; }, setCam: (i) => { camMode = i; } };
 }
 
 function boot(saved) {
