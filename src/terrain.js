@@ -33,7 +33,7 @@ export function carveRoadBeds(orig, meta, nodes, roads) {
   const { step, minX, minZ, cols, rows } = meta;
   const out = Float32Array.from(orig);
   const H = (x, z) => sampleGrid(orig, meta, x, z) + ROAD_SURFACE;
-  const MARGIN = 0.06;
+  const MARGIN = 0.09;
   const clampAt = (x, z, h) => {
     const fx = (x - minX) / step, fz = (z - minZ) / step;
     if (!(fx >= 0 && fz >= 0 && fx < cols - 1 && fz < rows - 1)) return;
