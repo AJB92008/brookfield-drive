@@ -38,13 +38,16 @@
       </div>
 
       <div id="missions" hidden>
-        <div class="ms-title">Missions <span>timed runs from where you are · press N to close</span></div>
+        <div class="ms-title">Missions <div id="missions-summary"></div></div>
+        <div class="ms-help"><kbd>↑</kbd><kbd>↓</kbd> choose · <kbd>Enter</kbd> start · <kbd>N</kbd> close · <kbd>G</kbd> ghost car on/off</div>
         <div id="missions-list"></div>
         <button id="missions-abandon" hidden>Abandon current mission</button>
-        <div class="ms-note">Par is the route's time at the speed limits. Beat it by a lot: gold at half of par, silver at 65%, bronze at 85%. No other rules.</div>
+        <div class="ms-note">You're taken to the start and the car is repaired. Beat the medal times; there are no other rules. Your best run comes back as a ghost car.</div>
       </div>
       <div id="mission-hud" hidden></div>
+      <div id="mission-intro" hidden></div>
       <div id="mission-count" hidden></div>
+      <div id="mission-split" hidden></div>
       <div id="mission-result" hidden></div>
       <div id="mission-marker" hidden><div class="mm-arrow"></div><div class="mm-dist"></div></div>
 
@@ -90,7 +93,7 @@
         <b>Controls</b>
         <div><kbd>W</kbd><kbd>↑</kbd> gas &nbsp; <kbd>S</kbd><kbd>↓</kbd> brake / reverse</div>
         <div><kbd>A</kbd><kbd>D</kbd><kbd>←</kbd><kbd>→</kbd> steer &nbsp; <kbd>Space</kbd> handbrake</div>
-        <div><kbd>N</kbd> missions &nbsp; <kbd>C</kbd> camera &nbsp; <kbd>V</kbd> look at the car &nbsp; <kbd>M</kbd> city map</div>
+        <div><kbd>N</kbd> missions &nbsp; <kbd>G</kbd> ghost &nbsp; <kbd>C</kbd> camera &nbsp; <kbd>V</kbd> look at the car &nbsp; <kbd>M</kbd> city map</div>
         <div><kbd>R</kbd> back on the road (repairs the car) &nbsp; <kbd>T</kbd> traffic on/off</div>
         <div class="help-note">Police chase you for going 15+ over the limit or crashing near them. Get far away to escape.</div>
         <div><kbd>P</kbd> photoreal 3D city / classic &nbsp; <kbd>I</kbd> car specs &nbsp; <kbd>K</kbd> stock / sport tune</div>

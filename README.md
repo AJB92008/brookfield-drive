@@ -40,14 +40,14 @@ To update the hosted copy after changing the code, run `npm run build:artifact`.
 | V | Showcase camera that circles the car |
 | I | Show the car's spec sheet |
 | K | Switch between the Sport tune (default) and the stock car |
-| N | Missions: pick one with 1, 2 or a click |
+| N | Missions list (arrows + Enter, or click). During a run: Backspace restarts, G toggles the ghost car |
 | M | City map. Click anywhere on it to teleport there (cancels a mission) |
 | R | Put the car back on the nearest road, upright and repaired |
 | T | Turn traffic on or off |
 | P | Switch between the photoreal 3D city and the classic look |
 | H | Show or hide the controls panel |
 
-A gamepad also works: left stick steers, RT is gas, LT is brake, A/B is handbrake, Y changes camera, X resets, Back opens the map, Start opens missions (d-pad up/down picks one).
+A gamepad also works: left stick steers, RT is gas, LT is brake, A/B is handbrake, Y changes camera, X resets, Back opens the map, Start opens missions (d-pad picks, A starts or retries, B closes).
 
 ## Traffic and police
 
@@ -123,7 +123,7 @@ npm run audit-ground           # checks that the ground never pokes through a ro
 | `src/car.js` | The contact-shadow texture. |
 | `src/vehicles.js` | AI vehicle types: models, sizes, masses and acceleration, plus the lamp shader for brake lights, turn signals and police lights. |
 | `src/speedlimits.js` | Posted speed limit for every road. |
-| `src/missions.js` | Mission mode: routing on the road graph (Dijkstra by travel time at the speed limits), the destination beacon and on-screen marker, the timer, medals and saved bests. |
+| `src/missions.js` | Mission mode: the 12 missions, routing on the road graph (Dijkstra by travel time at the speed limits), the finish beacon and on-screen marker, splits, the ghost car, medals, results and saved bests. |
 | `src/police.js` | When police chase you, escapes, busts, and the pursuit banner. |
 | `src/crash.js` | Crash effects: sparks, debris, smoke, the damage model (dents, broken parts, effects on driving, HUD meter), and breakaway poles. |
 | `src/terrain.js` | Loads the elevation grid. `T()` is the drawn ground and `Troad()` the original lidar surface that roads follow. `carveRoadBeds()` lowers the ground under roads just enough. |
@@ -135,25 +135,42 @@ npm run audit-ground           # checks that the ground never pokes through a ro
 
 ## Missions
 
-Press **N** and pick a destination. Each mission is a timed run from wherever you are right now:
+Press **N** for the mission list: 12 timed runs between Brookfield landmarks, in three tiers. Pick one with the arrow keys and Enter, or click it.
 
-- **15185 Kings Ridge Ct.** That house isn't in OpenStreetMap, so the finish is the curb on the cul-de-sac bulb next to its mapped neighbors (15165 and 15160).
-- **Brookfield Square.** The mall's west entrance.
+| Tier | Mission | From → to |
+| --- | --- | --- |
+| Easy | Village Errand | Tonawanda Elementary School → Elm Grove Village Hall |
+| Easy | Ice Time | Burleigh Elementary School → The Ponds of Brookfield Ice Arena |
+| Easy | After-School Shopping | Pilgrim Park Middle School → Brookfield Square |
+| Easy | Code Blue | Brookfield Fire Station No. 1 → Ascension Elmbrook Hospital |
+| Medium | Last Bell | Brookfield East High School → 15185 Kings Ridge Ct. |
+| Medium | Morning Commute | 15185 Kings Ridge Ct. → Brookfield City Hall |
+| Medium | Movie Night | Brookfield Public Library → Silverspot Cinema |
+| Medium | Rivalry Game | Brookfield Central High School → Brookfield East High School |
+| Hard | Mall Dash | 15185 Kings Ridge Ct. → Brookfield Square |
+| Hard | The Long Way Home | Brookfield Sports Complex → 15185 Kings Ridge Ct. |
+| Hard | Bullseye to Bullseye | Target (west, Bluemound) → Target (east, Bluemound) |
+| Hard | Cross-Town | Brookfield Academy → Elm Grove Village Hall |
+
+15185 Kings Ridge Ct. isn't in OpenStreetMap, so that finish is the curb on the cul-de-sac bulb next to its mapped neighbors (15165 and 15160). Brookfield Square's finish is the mall's west entrance.
 
 How a run works:
 
-- **Start:** a 3-second countdown with the car held still, then the clock runs until you reach the destination.
+- **Same start every time.** You're taken to the mission's start, at or beside the place it's named for, and the car is repaired and traffic resets. A card shows the mission, the medal times and your best during the 3-second countdown.
+- **Fixed medal times** for gold, silver and bronze on every mission, so every run is comparable and your best is a real record. They were set by driving each mission with a scripted test driver (traffic off): gold is its time plus 20%, silver plus 60%, bronze about double.
 - **No other rules.** Speed, run lights, cut through lots. The police leave you alone for the run.
 - **Navigation:**
   - The route shows on the minimap and the city map. It's the fastest legal route at the speed limits, it respects one-way streets and divided roads, and it updates as you drive, so it follows you if you leave it.
-  - A tall light beam stands over the finish. You can see it from across town, and it grows with distance so it doesn't shrink to nothing.
+  - A tall light beam, colored by tier, stands over the finish. You can see it from across town.
   - A label on screen shows the distance; when the finish is off screen, an arrow at the edge points to it.
-- **Medals:** par is the route's time at the speed limits from where you started. With no rules, par is easy, so the medals ask for much more: gold at half of par or less, silver at 65%, bronze at 85%. A scripted test driver with traffic off finished both runs in 41–42% of par. Because start points differ, your best is the run that beat its par by the most. Bests are saved in your browser.
-- **Minimum distance:** a run must be at least 400 m by road.
-- **Ending early:** open the menu to abandon a run. Teleporting from the map cancels it.
+- **Splits:** when you're 3/4, 1/2 and 1/4 of the way from the finish (by road), the split time pops up against your best run's split.
+- **Ghost:** your best run plays back as a see-through car you can race. **G** turns it on or off.
+- **Results:** medal, time and the change from your best, every split against your best, top and average speed, distance driven and damage taken. **Enter** retries, **N** opens the list, **Esc** drives on.
+- **Restart** a run any time with **Backspace**. Abandon one from the list; teleporting from the city map cancels it.
+- Bests and ghosts are saved in your browser.
 
 ## Ideas for next steps
 
-- **More missions.** Checkpoint races or delivery runs to more real places, such as the Brookfield East/Central high schools.
+- **Other mission types.** Checkpoint races, deliveries, or police escapes.
 
 Map data © OpenStreetMap contributors, licensed under the ODbL. The in-game attribution must stay visible.

@@ -143,7 +143,7 @@ function mergeByPosition(g) {
   return m;
 }
 
-function buildModel(envMap) {
+export function buildModel(envMap) {
   const L2 = SC430.lengthM / 2, AX = SC430.wheelbaseM / 2;
   const group = new THREE.Group();
   const paintColor = new THREE.Color(0xa3101b); // "Absolutely Red"

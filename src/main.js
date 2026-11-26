@@ -176,7 +176,13 @@ async function main(saved = {}) {
     if (g !== null) return g;
     return map.terrain ? player.y + T(x, z) - T(player.x, player.z) : player.y;
   };
-  const missions = new Missions({ map, roads, scene, player, hud, police, ground: missionGround });
+  const missions = new Missions({
+    map, roads, buildings, scene, player, hud, police, ground: missionGround,
+    // mission start: exactly at the start point (lots and school drives included), repaired, fresh traffic
+    teleport: (x, z, h) => { hud.toggleBig(false); player.place(x, z, h); crash.repair(); afterMove(); },
+    mode: () => mode,
+    damage: () => crash.damage?.total ?? 0,
+  });
   let groundPendingSince = 0;
   function afterMove() {
     traffic.clear();
@@ -288,10 +294,14 @@ async function main(saved = {}) {
   input.on('KeyC', () => { camMode = (camMode + 1) % CAM_MODES.length; });
   input.on('KeyV', () => { camMode = CAM_MODES.indexOf('orbit'); }); // showcase view of the car
   input.on('KeyM', () => hud.toggleBig());
-  input.on('Escape', () => { hud.toggleBig(false); missions.toggleMenu(false); });
+  input.on('Escape', () => { hud.toggleBig(false); missions.toggleMenu(false); missions.closeResult(); });
   input.on('KeyN', () => missions.toggleMenu());
-  input.on('Digit1', () => { if (!missions.menu.hidden) missions.start(0); });
-  input.on('Digit2', () => { if (!missions.menu.hidden) missions.start(1); });
+  input.on('ArrowUp', () => missions.nav(-1));
+  input.on('ArrowDown', () => missions.nav(1));
+  input.on('Enter', () => missions.confirm());
+  input.on('NumpadEnter', () => missions.confirm());
+  input.on('KeyG', () => missions.toggleGhost());
+  input.on('Backspace', () => { if (missions.running) missions.retry(); });
   input.on('KeyR', () => { placeOnRoad(player.x, player.z, player.heading); crash.repair(); afterMove(); });
   input.on('KeyP', () => applyMode(mode === 'photo' ? 'classic' : 'photo'));
   input.on('KeyT', () => { traffic.enabled = !traffic.enabled; if (!traffic.enabled) { traffic.clear(); police.reset(); } traffic._seeded = false; });
@@ -357,6 +367,7 @@ async function main(saved = {}) {
     last = now;
     input.poll();
     if (missions.hold) { input.throttle = 0; input.brake = 0; input.steer = 0; input.handbrake = true; } // mission countdown (brake alone would shift into reverse)
+    else if (missions.menuOpen) { input.throttle = 0; input.brake = 0; input.steer = 0; } // arrows pick a mission: coast
     if (photo && mode === 'photo') {
       photo.update();
       // Calibrate "ground = y 0" once the detailed tiles have finished streaming (coarse tiles are tens of m off).
