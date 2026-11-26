@@ -4,8 +4,8 @@
 //    leave it.
 //  - A light beacon stands over the destination; an on-screen label (or an edge arrow when it's off
 //    screen) shows where it is and how far.
-//  - Par = the route's time at the speed limits from where you started. Gold <= 80% of par, silver <=
-//    par, bronze <= 130% of par. No other rules: only your time counts. Best results are saved.
+//  - Par = the route's time at the speed limits from where you started. Gold <= 50% of par, silver <=
+//    65%, bronze <= 85% (see MEDALS). No other rules: only your time counts. Best results are saved.
 import * as THREE from 'three';
 import { computeSpeedLimits } from './speedlimits.js';
 
@@ -22,7 +22,10 @@ export const MISSIONS = [
     x: 1200, z: 3209, r: 30, color: 0xffb02e, // west entrance parking aisle
   },
 ];
-const MEDALS = [['gold', 0.8], ['silver', 1.0], ['bronze', 1.3]];
+const MIN_RUN = 400; // m by road
+// fractions of par. Calibrated with a scripted driver (no traffic, full throttle on straights, braking
+// for corners): it finished both runs in 41-42% of par, so gold is that pace plus ~20%
+const MEDALS = [['gold', 0.5], ['silver', 0.65], ['bronze', 0.85]];
 const fmt = (t) => {
   if (!Number.isFinite(t)) return '—';
   const m = Math.floor(t / 60), s = t - m * 60;
@@ -283,7 +286,8 @@ export class Missions {
     const P = this.player;
     const route = this.router.route(P.x, P.z, P.heading);
     if (!route) { this.hud.toast("Couldn't find a route from here. Press R to get back on a road."); return; }
-    if (Math.hypot(m.x - P.x, m.z - P.z) < m.r + 40) { this.hud.toast("You're already there. Start this one from somewhere else."); return; }
+    // too short a run makes a meaningless (and farmable) best
+    if (route.length < MIN_RUN) { this.hud.toast(`Too close: start at least ${MIN_RUN} m away by road.`, 3500); return; }
     const beacon = makeBeacon(m.color);
     const base = new THREE.Vector3(m.x, (this.ground?.(m.x, m.z) ?? 0) + 0.08, m.z);
     beacon.position.copy(base);
@@ -308,7 +312,7 @@ export class Missions {
     this.active.beacon.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); });
     this.active = null;
     this.hold = false;
-    if (this.police) this.police.suspended = false;
+    if (this.police) { this.police.suspended = false; this.police.cool = Math.max(this.police.cool, 5); } // no instant chase for crossing the line at 150 mph
     this.hud.route = null;
     this.countEl.hidden = true;
     this.hudEl.hidden = true;
@@ -331,7 +335,7 @@ export class Missions {
     const r = this.result;
     this.resultEl.innerHTML = `<div class="mr-title">${medal ? `<i class="medal ${medal}"></i>${medal[0].toUpperCase() + medal.slice(1)}` : 'Arrived'}</div>` +
       `<div class="mr-dest">${m.name}</div><div class="mr-time">${fmt(time)}</div>` +
-      `<div class="mr-sub">par ${fmt(a.par)} · gold ${fmt(a.par * 0.8)}</div>` +
+      `<div class="mr-sub">par ${fmt(a.par)} · gold ${fmt(a.par * MEDALS[0][1])}</div>` +
       `<div class="mr-sub">${better ? (prev ? 'New best!' : 'First run saved') : `Best: ${fmt(prev.time)} (par ${fmt(prev.par)})`}</div>` +
       '<div class="mr-hint">N for missions</div>';
     this.resultEl.hidden = false;

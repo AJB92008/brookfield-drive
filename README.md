@@ -148,7 +148,8 @@ How a run works:
   - The route shows on the minimap and the city map. It's the fastest legal route at the speed limits, it respects one-way streets and divided roads, and it updates as you drive, so it follows you if you leave it.
   - A tall light beam stands over the finish. You can see it from across town, and it grows with distance so it doesn't shrink to nothing.
   - A label on screen shows the distance; when the finish is off screen, an arrow at the edge points to it.
-- **Medals:** par is the route's time at the speed limits from where you started. Finish in 80% of par or less for gold, par or less for silver, and 130% of par or less for bronze. Because start points differ, your best is the run that beat its par by the most. Bests are saved in your browser.
+- **Medals:** par is the route's time at the speed limits from where you started. With no rules, par is easy, so the medals ask for much more: gold at half of par or less, silver at 65%, bronze at 85%. A scripted test driver with traffic off finished both runs in 41–42% of par. Because start points differ, your best is the run that beat its par by the most. Bests are saved in your browser.
+- **Minimum distance:** a run must be at least 400 m by road.
 - **Ending early:** open the menu to abandon a run. Teleporting from the map cancels it.
 
 ## Ideas for next steps
