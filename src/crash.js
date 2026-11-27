@@ -1,8 +1,10 @@
-// Crashes for the player's car: sparks, flying debris and smoke; a damage model (front / rear / left /
-// right) that dents the body where you hit, breaks lights and mirrors, smokes, and hurts how the car
-// drives until you press R; and breakaway poles (streetlights, stop signs, street-name posts) that snap
-// at the base and fall over.
+// Crashes for the player's car: sparks, flying debris, smoke and steam; breakaway poles (streetlights,
+// stop signs, street-name posts) that snap at the base and fall over. The damage model itself (what
+// breaks and what it does to the car) is in damage.js.
 import * as THREE from 'three';
+import { DamageModel } from './damage.js';
+
+const PAINT = 0xa3101b;
 
 // ------------------------------------------------------------------ particles
 const PVERT = `
@@ -83,10 +85,12 @@ class Particles {
 
 export class CrashFX {
   constructor(scene, ground) {
+    this.scene = scene;
     this.ground = ground; // (x, z, y) -> ground height or null
     // daylight on pale concrete: additive sparks vanish, so they're drawn as solid hot-colored streaks
     this.sparks = new Particles(scene, 900, THREE.NormalBlending);
-    this.smoke = new Particles(scene, 260, THREE.NormalBlending);
+    this.smoke = new Particles(scene, 420, THREE.NormalBlending);
+    this.flames = new Particles(scene, 500, THREE.AdditiveBlending); // flames glow
     // debris: little boxes that tumble, bounce and settle
     this.maxDebris = 160;
     this.debris = [];
@@ -125,6 +129,14 @@ export class CrashFX {
     }
   }
 
+  // white, fast-fading steam (a hot, leaking radiator)
+  steamPuff(x, y, z) {
+    this.smoke.add({
+      x: x + (Math.random() - 0.5) * 0.5, y, z: z + (Math.random() - 0.5) * 0.5, vx: (Math.random() - 0.5) * 0.8, vy: 1.6 + Math.random() * 1.2, vz: (Math.random() - 0.5) * 0.8,
+      r: 0.92, g: 0.94, b: 0.96, a: 0.32, a0: 0.32, s: 0.35, s0: 0.4 + Math.random() * 0.3, age: 0, life: 0.9 + Math.random() * 0.6,
+    });
+  }
+
   smokePuff(x, y, z, dark, n = 1) {
     for (let i = 0; i < n; i++) {
       const g = dark ? 0.12 + Math.random() * 0.08 : 0.55 + Math.random() * 0.2;
@@ -135,9 +147,25 @@ export class CrashFX {
     }
   }
 
+  // a tongue of flame: rises, swells and cools from yellow through orange and red to soot
+  flamePuff(x, y, z, size) {
+    this.flames.add({
+      x: x + (Math.random() - 0.5) * 0.3, y, z: z + (Math.random() - 0.5) * 0.3, vx: (Math.random() - 0.5) * 0.7, vy: 1.6 + Math.random() * 1.6, vz: (Math.random() - 0.5) * 0.7,
+      r: 1, g: 0.85, b: 0.35, a: 0.6, s: size, s0: size * (0.7 + Math.random() * 0.5), age: 0, life: 0.3 + Math.random() * 0.3,
+    });
+  }
+
   update(dt, camera, renderer) {
     const scale = renderer.domElement.height / (2 * Math.tan((camera.fov * Math.PI) / 360));
-    this.sparks.mat.uniforms.uScale.value = this.smoke.mat.uniforms.uScale.value = scale;
+    this.sparks.mat.uniforms.uScale.value = this.smoke.mat.uniforms.uScale.value = this.flames.mat.uniforms.uScale.value = scale;
+    this.flames.update(dt, (p, h) => {
+      p.x += p.vx * h; p.y += p.vy * h; p.z += p.vz * h; p.vy += 1.2 * h;
+      const k = p.age / p.life;
+      p.s = p.s0 * (1 + k * 0.8) * (1 - k * 0.5);
+      p.r = 1; p.g = Math.max(0.18, 0.82 - k * 0.9); p.b = Math.max(0.03, 0.4 - k * 0.9);
+      p.a = 0.6 * (1 - k);
+      return true;
+    });
     this.sparks.update(dt, (p, h) => {
       p.vy -= 9.8 * h; p.x += p.vx * h; p.y += p.vy * h; p.z += p.vz * h;
       const k = p.age / p.life;
@@ -230,185 +258,16 @@ export class Poles {
 }
 
 // ------------------------------------------------------------------ damage
-const NO_DAMAGE = { power: 1, drag: 1, pull: 0, grip: 1, wobble: 0 };
-const PAINT = 0xa3101b;
-
-export class Damage {
-  constructor(player, fx, hud) {
-    this.player = player;
-    this.fx = fx;
-    this.hud = hud;
-    this.zones = { front: 0, rear: 0, left: 0, right: 0 };
-    this.parts = player.parts; // body/cabin meshes, lights, mirrors, wheels
-    for (const mesh of [this.parts.body, this.parts.cabin]) mesh.userData.orig = Float32Array.from(mesh.geometry.attributes.position.array);
-    this.broken = new Set();
-    this.brokenMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.9 });
-    this.smokeT = 0;
-    this.el = document.getElementById('damage');
-    this.pctEl = document.getElementById('damage-pct');
-    this.zoneEls = Object.fromEntries(['front', 'rear', 'left', 'right'].map((z) => [z, document.getElementById(`dz-${z}`)]));
-    player.dmg = NO_DAMAGE;
-    this.render();
-  }
-
-  get total() {
-    const z = this.zones;
-    return Math.min(100, z.front * 0.4 + z.rear * 0.15 + z.left * 0.225 + z.right * 0.225 + Math.max(z.front, z.rear, z.left, z.right) * 0.25);
-  }
-
-  // what the damage does to the driving
-  effects() {
-    const z = this.zones, f = z.front / 100, side = Math.max(z.left, z.right) / 100;
-    return {
-      power: 1 - 0.6 * f * f - 0.15 * (z.rear / 100), // crushed radiator / engine, bent exhaust
-      drag: 1 + 0.5 * f, // crumpled nose
-      pull: ((z.right - z.left) / 100) * 0.09, // bent suspension pulls toward the damaged side
-      grip: 1 - 0.18 * side,
-      wobble: Math.max(0, side - 0.45) * 1.4, // a bent wheel shimmies
-    };
-  }
-
-  // a hit at world point (cx, cz) with impact speed (m/s); n = push direction on the car (world)
-  hit(cx, cz, impact, nx, nz) {
-    const P = this.player;
-    if (impact < 2.2) return;
-    const h = P.heading, fx = Math.sin(h), fz = Math.cos(h), lx = Math.cos(h), lz = -Math.sin(h); // forward, left
-    const dx = cx - P.x, dz = cz - P.z;
-    const along = dx * fx + dz * fz, left = dx * lx + dz * lz;
-    const zone = Math.abs(along) > 1.45 ? (along > 0 ? 'front' : 'rear') : left > 0 ? 'left' : 'right';
-    let dmg = Math.min(70, Math.pow(impact - 2, 1.35) * 1.15);
-    // one crash often makes several contacts in a row (the other car keeps shoving): count the worst once
-    const now = performance.now();
-    const recent = this.lastHit && now - this.lastHit.t < 300 && this.lastHit.zone === zone ? this.lastHit.dmg : 0;
-    this.lastHit = { t: now, zone, dmg: Math.max(dmg, recent) };
-    dmg = Math.max(0, dmg - recent);
-    this.zones[zone] = Math.min(100, this.zones[zone] + dmg);
-    // dent the body where it was hit (push direction in car-local coordinates: x = left, z = forward)
-    const pnx = nx * lx + nz * lz, pnz = nx * fx + nz * fz;
-    const lp = [Math.max(-0.95, Math.min(0.95, left)), 0.62, Math.max(-2.25, Math.min(2.25, along))];
-    this.dent(this.parts.body, lp, [pnx, 0, pnz], Math.min(0.45, 0.02 * impact), Math.min(1.2, 0.5 + impact * 0.035));
-    if (Math.abs(along) < 1.2 && impact > 7) this.dent(this.parts.cabin, [lp[0], 1.05, lp[2]], [pnx * 0.7, -0.2, pnz * 0.7], Math.min(0.12, impact * 0.006), 0.7);
-    // lights and mirrors near the hit
-    const near = (p, r) => Math.hypot(p.x - lp[0], p.z - lp[2]) < r;
-    for (const [key, mesh] of Object.entries(this.parts.lamps)) {
-      if (key === 'grille' || this.broken.has(key) || !near(mesh.position, impact > 9 ? 1.1 : 0.75) || impact < 4.5) continue;
-      this.broken.add(key);
-      if (key.startsWith('brake')) mesh.visible = false;
-      else { mesh.userData.mat ||= mesh.material; mesh.material = this.brokenMat; mesh.scale.y = 0.6; }
-      const wp = mesh.getWorldPosition(new THREE.Vector3());
-      this.fx.debrisBurst(wp.x, wp.y, wp.z, -nx * 2, -nz * 2, 6, key.startsWith('head') ? [0xdfe7ea, 0xf4f8fb] : [0xc4141a, 0x8a0a10], 0.6);
-    }
-    for (const [key, mesh] of Object.entries(this.parts.mirrors)) {
-      if (this.broken.has(key) || !near(mesh.position, 0.9) || impact < 5) continue;
-      this.broken.add(key);
-      mesh.visible = false;
-      const wp = mesh.getWorldPosition(new THREE.Vector3());
-      this.fx.debrisBurst(wp.x, wp.y, wp.z, nx * 3, nz * 3, 3, [PAINT, 0x111214, 0xdfe7ea], 1.2);
-    }
-    // body bits
-    this.fx.debrisBurst(cx, P.y + 0.5, cz, -nx * 3 + P.vx * 0.3, -nz * 3 + P.vz * 0.3, Math.min(18, Math.round(impact * 0.9)), [PAINT, PAINT, 0x111214, 0x3a3c40]);
-    this.apply();
-  }
-
-  // rolled onto the roof / side: crush the cabin
-  rollHit(speed) {
-    if (speed < 1.5) return;
-    const dmg = Math.min(40, speed * 6);
-    for (const z of ['left', 'right', 'front', 'rear']) this.zones[z] = Math.min(100, this.zones[z] + dmg * (z === 'front' || z === 'rear' ? 0.4 : 0.7));
-    this.dent(this.parts.cabin, [0, 1.35, -0.3], [0, -1, 0], Math.min(0.25, speed * 0.05), 1.3);
-    this.dent(this.parts.body, [Math.sign(this.player.roll) * -0.9, 0.9, 0], [Math.sign(this.player.roll), -0.3, 0], Math.min(0.15, speed * 0.03), 1.4);
-    this.apply();
-  }
-
-  dent(mesh, p, dir, depth, radius) {
-    const attr = mesh.geometry.attributes.position, a = attr.array, o = mesh.userData.orig;
-    const L = Math.hypot(dir[0], dir[1], dir[2]) || 1;
-    const ux = dir[0] / L, uy = dir[1] / L, uz = dir[2] / L;
-    for (let i = 0; i < a.length; i += 3) {
-      const dx = a[i] - p[0], dy = (a[i + 1] - p[1]) * 1.4, dz = a[i + 2] - p[2];
-      const d = Math.hypot(dx, dy, dz);
-      if (d > radius) continue;
-      const w = (1 - d / radius) ** 2;
-      const crumple = 1 + (Math.sin(a[i] * 37 + a[i + 2] * 23) * 0.35);
-      a[i] += ux * depth * w * crumple; a[i + 1] += uy * depth * w * crumple; a[i + 2] += uz * depth * w * crumple;
-      // never more than 55 cm from the original shape
-      const ox = a[i] - o[i], oy = a[i + 1] - o[i + 1], oz = a[i + 2] - o[i + 2], od = Math.hypot(ox, oy, oz);
-      if (od > 0.55) { a[i] = o[i] + (ox / od) * 0.55; a[i + 1] = o[i + 1] + (oy / od) * 0.55; a[i + 2] = o[i + 2] + (oz / od) * 0.55; }
-    }
-    attr.needsUpdate = true;
-    mesh.geometry.computeVertexNormals();
-    // lights, grille and mirrors ride along with the metal they're bolted to
-    if (mesh === this.parts.body) {
-      for (const part of [...Object.values(this.parts.lamps), ...Object.values(this.parts.mirrors)]) {
-        part.userData.home ||= part.position.clone();
-        const q = part.position, d = Math.hypot(q.x - p[0], (q.y - p[1]) * 1.4, q.z - p[2]);
-        if (d > radius) continue;
-        const w = (1 - d / radius) ** 2;
-        q.x += ux * depth * w; q.y += uy * depth * w; q.z += uz * depth * w;
-        if (q.distanceTo(part.userData.home) > 0.55) q.sub(part.userData.home).setLength(0.55).add(part.userData.home);
-      }
-    }
-  }
-
-  apply() {
-    const P = this.player;
-    P.dmg = this.effects();
-    // a badly bent wheel leans
-    for (const w of this.parts.wheels) {
-      const side = w.pivot.position.x > 0 ? 'left' : 'right';
-      const bend = Math.max(0, this.zones[side] - 55) / 45;
-      w.pivot.rotation.z = (side === 'left' ? 1 : -1) * bend * 0.16 * (w.front ? 1 : 0.6);
-    }
-    this.render();
-  }
-
-  repair() {
-    for (const k in this.zones) this.zones[k] = 0;
-    for (const mesh of [this.parts.body, this.parts.cabin]) {
-      mesh.geometry.attributes.position.array.set(mesh.userData.orig);
-      mesh.geometry.attributes.position.needsUpdate = true;
-      mesh.geometry.computeVertexNormals();
-    }
-    for (const mesh of Object.values(this.parts.lamps)) { mesh.visible = true; if (mesh.userData.mat) mesh.material = mesh.userData.mat; mesh.scale.y = 1; }
-    for (const mesh of Object.values(this.parts.mirrors)) mesh.visible = true;
-    for (const mesh of [...Object.values(this.parts.lamps), ...Object.values(this.parts.mirrors)]) if (mesh.userData.home) mesh.position.copy(mesh.userData.home);
-    this.broken.clear();
-    this.apply();
-  }
-
-  // smoke from a damaged engine
-  update(dt) {
-    const f = this.zones.front;
-    if (f < 40) return;
-    this.smokeT -= dt;
-    if (this.smokeT > 0) return;
-    this.smokeT = f > 75 ? 0.05 : 0.12;
-    const P = this.player, h = P.heading;
-    const x = P.x + Math.sin(h) * 1.5, z = P.z + Math.cos(h) * 1.5;
-    this.fx.smokePuff(x, P.y + 1.0, z, f > 75, 1);
-  }
-
-  render() {
-    const t = Math.round(this.total);
-    this.el.hidden = t < 1;
-    this.pctEl.textContent = `${t}%`;
-    for (const [z, el] of Object.entries(this.zoneEls)) {
-      const v = this.zones[z] / 100;
-      // green -> yellow -> red
-      const hue = Math.round(120 * (1 - Math.min(1, v)));
-      el.setAttribute('fill', v < 0.01 ? 'rgba(255,255,255,0.18)' : `hsl(${hue}, 80%, 50%)`);
-    }
-  }
-}
-
 // ------------------------------------------------------------------ everything together
 export class CrashSystem {
   constructor({ scene, player, furniture, ground, hud }) {
     this.fx = new CrashFX(scene, ground);
     this.poles = new Poles(furniture, this.fx);
-    this.damage = new Damage(player, this.fx, hud);
+    this.damage = new DamageModel(player, this.fx, hud);
     this.player = player;
     this.scrapeT = 0;
+    this.traffic = null; // set by main.js: damaged AI cars steam, smoke and sometimes burn
+    this.aiT = 0;
   }
   setGround(ground) { this.fx.ground = ground; }
 
@@ -419,10 +278,11 @@ export class CrashSystem {
     const tx = -nz, tz = nx;
     if (impact > 3 && kind !== 'tree') this.fx.sparkBurst(x, y, z, nx, nz, tx, tz, Math.min(110, Math.round(impact * 5)), impact);
     if (kind === 'tree' && impact > 4) this.fx.debrisBurst(x, y + 0.8, z, -nx * 2, -nz * 2, Math.min(14, Math.round(impact)), [0x3f6b2a, 0x5a8a3a, 0x6b4a2a]);
-    this.damage.hit(x, z, impact, nx, nz);
+    this.damage.hit(ev);
   }
   // sliding along a wall or car: a stream of sparks
   scrape(x, z, nx, nz, speed, dt) {
+    this.damage.scrape(x, z, speed, dt); // paint scuffed where it rubs
     this.scrapeT -= dt;
     if (this.scrapeT > 0 || speed < 3) return;
     this.scrapeT = 0.03;
@@ -435,10 +295,40 @@ export class CrashSystem {
     this.fx.debrisBurst(P.x, P.y + 0.6, P.z, P.vx * 0.5, P.vz * 0.5, Math.min(20, Math.round(speed * 5)), [PAINT, 0x111214, 0xdfe7ea]);
     this.damage.rollHit(speed);
   }
+  // came down hard from a jump or a drop
+  landing(v) { this.damage.landing(v); }
   repair() { this.damage.repair(); }
+  // AI cars with a crushed front: steam, then smoke, then (rarely) fire, within sight of the player
+  updateTraffic(dt) {
+    const cars = this.traffic?.cars;
+    if (!cars) return;
+    this.aiT -= dt;
+    const tick = this.aiT <= 0;
+    if (tick) this.aiT = 0.08;
+    const P = this.player;
+    for (const car of cars) {
+      const f = car.dent?.[0] || 0;
+      if (f < 0.2 && !car.fire) continue;
+      if (Math.abs(car.x - P.x) > 260 || Math.abs(car.z - P.z) > 260) continue;
+      const h = car.heading, fx = Math.sin(h), fz = Math.cos(h);
+      const nose = car.len / 2 - 0.7 - f;
+      const x = car.x + fx * nose, z = car.z + fz * nose, y = car.y + 1.05;
+      if (car.fire > 0) {
+        car.fire = Math.max(0, car.fire - dt / 75);
+        const n = Math.round(45 * car.fire * dt + Math.random());
+        for (let i = 0; i < n; i++) this.fx.flamePuff(x + (Math.random() - 0.5) * 1.2, y - 0.1, z + (Math.random() - 0.5) * 1.2, 0.2 + 0.3 * car.fire);
+        if (tick) this.fx.smokePuff(x, y + 0.6, z, true, 1);
+      } else if (tick && Math.random() < 0.6) {
+        if (f > 0.45 || car.wrecked) this.fx.smokePuff(x, y, z, f > 0.6, 1);
+        else this.fx.steamPuff(x, y - 0.1, z);
+      }
+    }
+  }
+
   update(dt, camera, renderer) {
     this.poles.update(dt);
     this.damage.update(dt);
+    this.updateTraffic(dt);
     this.fx.update(dt, camera, renderer);
   }
 }

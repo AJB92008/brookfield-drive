@@ -1,8 +1,10 @@
-// Downloads raw OpenStreetMap data for Brookfield, WI from the Overpass API.
+// Downloads raw OpenStreetMap data for the map (Brookfield + Waukesha, WI) from the Overpass API.
 // Saves responses to data-raw/ so build-map.mjs can run offline.
+// The bbox is fetched as a grid of tiles (one Overpass request each, cached in data-raw/osm-tiles/) and merged by
+// element id, so the area can grow without hitting Overpass timeouts.
 //
-// Usage: node scripts/fetch-osm.mjs [--force]
-import { mkdir, writeFile, access } from 'node:fs/promises';
+// Usage: node scripts/fetch-osm.mjs [--force] [--only=roads,pois]
+import { mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BBOX } from './bbox.mjs';
@@ -10,7 +12,16 @@ import { BBOX } from './bbox.mjs';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const RAW = join(ROOT, 'data-raw');
 
-const B = `${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east}`;
+// Tile grid: each tile is about the size of the old Brookfield-only bbox (~10 x 9 km), which fit in one request.
+const NX = 2, NY = 2;
+const TILES = [];
+for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+  const lat = (k) => BBOX.south + ((BBOX.north - BBOX.south) * k) / NY, lon = (k) => BBOX.west + ((BBOX.east - BBOX.west) * k) / NX;
+  TILES.push(`${lat(j).toFixed(5)},${lon(i).toFixed(5)},${lat(j + 1).toFixed(5)},${lon(i + 1).toFixed(5)}`);
+}
+const WHOLE = `${BBOX.south},${BBOX.west},${BBOX.north},${BBOX.east}`;
+// small queries that are fetched in one piece
+const UNTILED = new Set(['boundaries']);
 
 const ENDPOINTS = [
   'https://overpass.openstreetmap.fr/api/interpreter',
@@ -24,7 +35,7 @@ const DRIVABLE =
   'motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|' +
   'motorway_link|trunk_link|primary_link|secondary_link|tertiary_link|road';
 
-const QUERIES = {
+const QUERIES = (B) => ({
   // Roads + rail with node ids so shared nodes give us intersections.
   roads: `[out:json][timeout:180][bbox:${B}];
 (
@@ -77,7 +88,7 @@ out geom;`,
   boundaries: `[out:json][timeout:180];
 relation["boundary"="administrative"]["admin_level"="8"](${B});
 out geom;`,
-};
+});
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -126,16 +137,46 @@ async function exists(p) {
 const force = process.argv.includes('--force');
 // --only=roads,pois refetches just those queries (ignores the cache for them)
 const only = process.argv.find((a) => a.startsWith('--only='))?.slice(7).split(',') ?? null;
-await mkdir(RAW, { recursive: true });
-for (const [name, query] of Object.entries(QUERIES)) {
+const TILE_DIR = join(RAW, 'osm-tiles');
+await mkdir(TILE_DIR, { recursive: true });
+const tag = (b) => b.replace(/[^0-9.,-]/g, '').replace(/,/g, '_');
+for (const name of Object.keys(QUERIES(WHOLE))) {
   const out = join(RAW, `${name}.json`);
   if (only && !only.includes(name)) continue;
-  if (!force && !only && (await exists(out))) {
-    console.log(`${name}: cached (use --force to refetch)`);
-    continue;
+  const refetch = force || !!only;
+  const boxes = UNTILED.has(name) ? [WHOLE] : TILES;
+  // the merged file is current if it was built from exactly these tiles
+  if (!refetch && (await exists(out))) {
+    try {
+      const prev = JSON.parse(await readFile(out, 'utf8'));
+      if (JSON.stringify(prev.tiles) === JSON.stringify(boxes)) { console.log(`${name}: cached (use --force to refetch)`); continue; }
+    } catch {}
   }
-  console.log(`${name}: fetching...`);
-  const text = await fetchQuery(name, query);
-  await writeFile(out, text);
+  const seen = new Set();
+  const elements = [];
+  let header = null;
+  for (const [k, box] of boxes.entries()) {
+    const tileFile = join(TILE_DIR, `${name}-${tag(box)}.json`);
+    let text;
+    if (!refetch && (await exists(tileFile))) {
+      text = await readFile(tileFile, 'utf8');
+      console.log(`${name} [${k + 1}/${boxes.length}]: cached tile`);
+    } else {
+      console.log(`${name} [${k + 1}/${boxes.length}]: fetching ${box}...`);
+      text = await fetchQuery(`${name}[${k + 1}]`, QUERIES(box)[name]);
+      await writeFile(tileFile, text);
+    }
+    const json = JSON.parse(text);
+    header ??= { version: json.version, generator: json.generator, osm3s: json.osm3s };
+    // a way/relation crossing a tile edge (and every node it shares) comes back in more than one tile
+    for (const e of json.elements) {
+      const id = `${e.type}/${e.id}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      elements.push(e);
+    }
+  }
+  await writeFile(out, JSON.stringify({ ...header, tiles: boxes, elements }));
+  console.log(`${name}: ${elements.length} elements from ${boxes.length} tile(s)`);
 }
 console.log('Done. Now run: npm run build-map');

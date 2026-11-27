@@ -41,8 +41,8 @@ export class Input {
       if (lt > 0.05) brake = lt;
       if (pad.buttons[0]?.pressed || pad.buttons[1]?.pressed) handbrake = true;
       // edge-triggered buttons: Y = camera, Back = map, X = reset, Start = missions (d-pad picks, A starts
-      // or retries, B closes)
-      const map = { 3: 'KeyC', 8: 'KeyM', 2: 'KeyR', 9: 'KeyN', 12: 'ArrowUp', 13: 'ArrowDown', 0: 'Enter', 1: 'Escape' };
+      // or retries, B closes), LB = tow
+      const map = { 3: 'KeyC', 8: 'KeyM', 2: 'KeyR', 9: 'KeyN', 12: 'ArrowUp', 13: 'ArrowDown', 0: 'Enter', 1: 'Escape', 4: 'KeyF' };
       for (const [b, code] of Object.entries(map)) {
         const pressed = !!pad.buttons[b]?.pressed;
         if (pressed && !this.padPrev[b]) this.handlers.get(code)?.();

@@ -143,6 +143,64 @@ function mergeByPosition(g) {
   return m;
 }
 
+// A body panel that can dent, open, hang and fall off (damage.js): a copy of the source mesh's own surface
+// over the triangles `pick(cx, cy, cz, nx, ny, nz)` accepts (centroid, averaged normal), lifted `lift` m off it.
+// Geometry stays in car coordinates. `under` lists the source vertices it fully covers, which damage.js
+// darkens to show the bare structure once the panel opens or comes off.
+function extractPanel(src, pick, lift = 0.004) {
+  const pos = src.attributes.position.array, nrm = src.attributes.normal.array, col = src.attributes.color.array, idx = src.index.array;
+  const remap = new Map(), P = [], N = [], C = [], I = [];
+  const total = new Uint16Array(pos.length / 3), inPanel = new Uint16Array(pos.length / 3);
+  // loft() emits two triangles per quad, in order: decide per quad so panel edges run straight
+  for (let t = 0; t < idx.length; t += 6) {
+    const v = [];
+    for (let k = t; k < Math.min(t + 6, idx.length); k++) v.push(idx[k]);
+    for (const i of v) total[i]++;
+    let cx = 0, cy = 0, cz = 0, nx = 0, ny = 0, nz = 0;
+    for (const i of v) { cx += pos[i * 3]; cy += pos[i * 3 + 1]; cz += pos[i * 3 + 2]; nx += nrm[i * 3]; ny += nrm[i * 3 + 1]; nz += nrm[i * 3 + 2]; }
+    const nl = Math.hypot(nx, ny, nz) || 1, n = v.length;
+    if (!pick(cx / n, cy / n, cz / n, nx / nl, ny / nl, nz / nl, col[v[0] * 3])) continue;
+    for (const i of v) {
+      inPanel[i]++;
+      let j = remap.get(i);
+      if (j === undefined) {
+        j = P.length / 3;
+        remap.set(i, j);
+        P.push(pos[i * 3] + nrm[i * 3] * lift, pos[i * 3 + 1] + nrm[i * 3 + 1] * lift, pos[i * 3 + 2] + nrm[i * 3 + 2] * lift);
+        N.push(nrm[i * 3], nrm[i * 3 + 1], nrm[i * 3 + 2]);
+        C.push(col[i * 3], col[i * 3 + 1], col[i * 3 + 2]);
+      }
+      I.push(j);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+  g.setIndex(I);
+  g.computeBoundingBox();
+  const under = [];
+  for (const i of remap.keys()) if (inPanel[i] === total[i]) under.push(i);
+  return { geo: g, under };
+}
+
+// Glass for cracks: the same kind of copy, with planar UVs uv(x, y, z) -> [u, v] and a transparent canvas
+// texture damage.js draws the cracks on. Hidden until the glass cracks.
+function glassOverlay(src, pick, uv, w, h) {
+  const { geo } = extractPanel(src, pick, 0.006);
+  const p = geo.attributes.position.array, out = new Float32Array((p.length / 3) * 2);
+  for (let i = 0; i < p.length / 3; i++) { const [u, v] = uv(p[i * 3], p[i * 3 + 1], p[i * 3 + 2]); out[i * 2] = u; out[i * 2 + 1] = v; }
+  geo.setAttribute('uv', new THREE.BufferAttribute(out, 2));
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }));
+  mesh.visible = false;
+  mesh.renderOrder = 2;
+  return { mesh, canvas, ctx: canvas.getContext('2d'), tex, cracks: 0, shattered: false };
+}
+
 export function buildModel(envMap) {
   const L2 = SC430.lengthM / 2, AX = SC430.wheelbaseM / 2;
   const group = new THREE.Group();
@@ -169,9 +227,9 @@ export function buildModel(envMap) {
   };
   const stationsBody = new Set(prof.map((p) => p[0]));
   for (const az of [-AX, AX]) for (const o of [-0.42, -0.38, -0.33, -0.25, -0.15, 0, 0.15, 0.25, 0.33, 0.38, 0.42]) stationsBody.add(+(az + o).toFixed(3));
-  for (let z = -L2; z <= L2; z += 0.25) stationsBody.add(+z.toFixed(3));
+  for (let z = -L2; z <= L2; z += 0.12) stationsBody.add(+z.toFixed(3));
   const zs = [...stationsBody].filter((z) => z >= -L2 && z <= L2).sort((a, b) => a - b);
-  const SEG = 28;
+  const SEG = 36;
   const bodyRing = (z) => {
     const top = lerpTable(prof, z, 1), hw = lerpTable(prof, z, 2), bot = archBottom(z);
     const cy = (top + bot) / 2, hh = (top - bot) / 2;
@@ -190,6 +248,32 @@ export function buildModel(envMap) {
   const body = new THREE.Mesh(loft(zs, bodyRing, SEG, (p) => (p[1] < 0.27 ? TRIM : PAINT)), paint);
   body.castShadow = true;
   group.add(body);
+
+  // Panels that can come loose (damage.js). Each sits in a pivot at its hinge (or, for a bumper, at the corner
+  // it hangs from) with the mesh offset back, so the mesh's own coordinates are still car coordinates.
+  const panels = {};
+  const addPanel = (name, pick, hingeOf) => {
+    const { geo, under } = extractPanel(body.geometry, pick);
+    const hinge = hingeOf(geo.boundingBox);
+    const pivot = new THREE.Group();
+    pivot.position.copy(hinge);
+    const mesh = new THREE.Mesh(geo, paint);
+    mesh.position.copy(hinge).negate();
+    mesh.castShadow = true;
+    pivot.add(mesh);
+    group.add(pivot);
+    panels[name] = { mesh, pivot, hinge: hinge.clone(), under };
+  };
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  // bumper covers: the whole nose / the lower tail, hanging from the middle until damage.js picks a corner
+  addPanel('bumperF', (x, y, z) => z > 1.93, (b) => V(0, (b.min.y + b.max.y) / 2, b.min.z));
+  addPanel('bumperB', (x, y, z) => z < -2.0 && y < 0.78, (b) => V(0, (b.min.y + b.max.y) / 2, b.max.z));
+  // hood: hinged at the windshield, latched at the nose; trunk lid: hinged at the rear glass
+  addPanel('hood', (x, y, z, nx, ny) => z > 0.66 && z < 1.93 && ny > 0.5 && Math.abs(x) < 0.8, (b) => V(0, b.max.y, b.min.z));
+  addPanel('trunk', (x, y, z, nx, ny) => z > -2.0 && z < -1.2 && ny > 0.55 && Math.abs(x) < 0.78, (b) => V(0, b.max.y, b.max.z));
+  // doors: hinged at the front edge (local +x is the car's left)
+  addPanel('doorL', (x, y, z, nx) => nx > 0.55 && z > -0.88 && z < 0.62 && y > 0.34 && y < 0.97, (b) => V(b.max.x, 0, b.max.z));
+  addPanel('doorR', (x, y, z, nx) => nx < -0.55 && z > -0.88 && z < 0.62 && y > 0.34 && y < 0.97, (b) => V(b.min.x, 0, b.max.z));
 
   // Greenhouse: windshield, side glass, rear glass, body-colored hardtop roof
   const cabin = [
@@ -222,6 +306,16 @@ export function buildModel(envMap) {
   }), paint);
   cabinMesh.castShadow = true;
   group.add(cabinMesh);
+
+  // glass that can crack (windshield, rear glass) or shatter (side windows); glass is the dark vertex color
+  const isGlass = (c) => c < 0.3;
+  const glass = {
+    windshield: glassOverlay(cabinMesh.geometry, (x, y, z, nx, ny, nz, c) => isGlass(c) && z > 0.15 && nz > 0.3, (x, y) => [(x + 0.9) / 1.8, (y - 0.95) / 0.42], 512, 256),
+    rear: glassOverlay(cabinMesh.geometry, (x, y, z, nx, ny, nz, c) => isGlass(c) && z < -0.7 && nz < -0.3, (x, y) => [(0.9 - x) / 1.8, (y - 0.95) / 0.42], 256, 128),
+    sideL: glassOverlay(cabinMesh.geometry, (x, y, z, nx, ny, nz, c) => isGlass(c) && nx > 0.45 && Math.abs(nz) < 0.6, (x, y, z) => [(z + 1.2) / 1.85, (y - 0.95) / 0.42], 256, 128),
+    sideR: glassOverlay(cabinMesh.geometry, (x, y, z, nx, ny, nz, c) => isGlass(c) && nx < -0.45 && Math.abs(nz) < 0.6, (x, y, z) => [(0.65 - z) / 1.85, (y - 0.95) / 0.42], 256, 128),
+  };
+  for (const gl of Object.values(glass)) group.add(gl.mesh);
 
   // lights, grille, mirrors
   const lamp = new THREE.MeshPhysicalMaterial({ color: 0xe9eef2, roughness: 0.05, metalness: 0.1, transmission: 0, envMap, emissive: 0x222222 });
@@ -303,7 +397,7 @@ export function buildModel(envMap) {
     group.add(pivot);
     wheels.push({ pivot, spin, front: sz > 0 });
   }
-  return { group, wheels, brakeLights, parts: { body, cabin: cabinMesh, lamps, mirrors, wheels } };
+  return { group, wheels, brakeLights, parts: { body, cabin: cabinMesh, lamps, mirrors, wheels, panels, glass } };
 }
 
 // Simple outdoor reflection environment: blue sky overhead, bright horizon, gray ground below.
@@ -365,7 +459,7 @@ export class PlayerCar {
     this.bodyRoll = 0; this.bodyPitch = 0;
     this.offRoad = false;
     this.parts = model.parts;
-    this.dmg = { power: 1, drag: 1, pull: 0, grip: 1, wobble: 0 }; // set by the damage model (crash.js)
+    this.dmg = { power: 1, drag: 1, pull: 0, grip: 1, wobble: 0, maxGear: 5, stuckGear: 0, brake: 1, brakePull: 0, steerLock: 1, rimDrag: 0, engineDead: false, noDrive: false }; // set by the damage model (damage.js)
     this.resetCrashState();
   }
 
@@ -414,9 +508,12 @@ export class PlayerCar {
     // up on two wheels or more: no traction, no steering
     const rolled = Math.abs(this.roll) > 0.45;
     let throttle = rolled ? 0 : input.throttle, brake = rolled ? 0 : input.brake;
+    this.throttleIn = throttle; // engine load, for the damage model's cooling
+    const driveOk = !D.engineDead && !D.noDrive;
 
-    // Gear selection: S held at a standstill selects reverse; W selects drive again.
-    if (this.gear > 0 && brake > 0 && !throttle && vf < 0.4) this.gear = -1;
+    // Gear selection: S held at a standstill selects reverse; W selects drive again. (A jammed gearbox
+    // can't.)
+    if (this.gear > 0 && brake > 0 && !throttle && vf < 0.4 && !D.stuckGear) this.gear = -1;
     else if (this.gear < 0 && throttle > 0 && vf > -0.4) this.gear = 1;
     // in reverse, S is the accelerator and W the brake
     if (this.gear < 0) [throttle, brake] = [brake, throttle];
@@ -433,16 +530,16 @@ export class PlayerCar {
       engineRpm = Math.max(lockedRpm, stallTarget);
       tcMult = 1 + (TC_MULT - 1) * Math.max(0, 1 - lockedRpm / Math.max(stallTarget, 1));
     } else engineRpm = lockedRpm;
-    this.rpm += (Math.min(engineRpm, T.revLimit) - this.rpm) * Math.min(1, dt * 12);
+    this.rpm += ((D.engineDead ? 0 : Math.min(engineRpm, T.revLimit)) - this.rpm) * Math.min(1, dt * 12);
 
     let driveForce = 0;
     const limited = this.gear > 0 && T.limiterMph && vf >= T.limiterMph * MPH;
-    if (throttle > 0 && engineRpm < T.revLimit && !limited) {
+    if (throttle > 0 && engineRpm < T.revLimit && !limited && driveOk) {
       const shiftCut = this.shiftTimer > 0 ? 0.35 : 1;
       driveForce = (engineTorque(Math.min(engineRpm, FUEL_CUT)) * T.powerMult * D.power * throttle * tcMult * total * DRIVELINE * shiftCut) / TIRE_R;
     }
     if (this.gear < 0) driveForce = -driveForce;
-    if (!throttle && lockedRpm > IDLE * 1.2) {
+    if (!throttle && lockedRpm > IDLE * 1.2 && driveOk) {
       // engine braking (closed throttle) always opposes the way the wheels are turning
       driveForce = -Math.sign(vf) * ((25 + 0.006 * lockedRpm) * total * DRIVELINE) / TIRE_R;
     }
@@ -453,13 +550,13 @@ export class PlayerCar {
     driveForce = Math.max(-maxTraction, Math.min(maxTraction, driveForce));
 
     // brakes (4-wheel discs + ABS): up to ~1 g on dry pavement
-    let brakeForce = brake * mu * m * G * 0.98;
+    let brakeForce = brake * mu * m * G * 0.98 * D.brake;
     if (input.handbrake) brakeForce = Math.max(brakeForce, mu * m * G * 0.45);
     const aero = 0.5 * RHO * SC430.cd * D.drag * FRONTAL_AREA * vf * vf;
-    const rolling = CRR * m * G * (this.offRoad ? 4 : 1);
+    const rolling = (CRR + D.rimDrag) * m * G * (this.offRoad ? 4 : 1); // + a flat, a bare rim or a missing wheel dragging
     // automatic in gear with no throttle: torque-converter creep holds the car on gentle slopes (~7%)
     // when nearly stopped; steeper hills still roll it back
-    const creepHold = this.gear !== 0 && !throttle ? m * G * 0.07 * Math.max(0, 1 - Math.abs(vf) / 2) : 0;
+    const creepHold = this.gear !== 0 && !throttle && driveOk ? m * G * 0.07 * Math.max(0, 1 - Math.abs(vf) / 2) : 0;
     let resist = aero + rolling + brakeForce + creepHold;
     let a = driveForce / m;
     // gravity along the slope: slopePitch > 0 means the nose points downhill
@@ -475,20 +572,22 @@ export class PlayerCar {
 
     // ----- automatic transmission -----
     this.shiftTimer = Math.max(0, this.shiftTimer - dt);
-    if (this.gear > 0 && this.shiftTimer === 0) {
+    if (this.gear > 0 && D.stuckGear) this.gear = D.stuckGear; // jammed: no shifting at all
+    else if (this.gear > D.maxGear) { this.gear = D.maxGear; this.shiftTimer = T.downshiftTime; } // lost the top gears
+    if (this.gear > 0 && this.shiftTimer === 0 && !D.stuckGear) {
       const rpmIn = (g) => wheelRpm * SC430.gears[g - 1] * SC430.finalDrive;
       const upAt = 1900 + (T.shiftRpm - 1900) * throttle;
       const downAt = 1150 + 2400 * throttle;
-      if (this.gear < 5 && rpmIn(this.gear) > upAt && rpmIn(this.gear + 1) > 1100) { this.gear++; this.shiftTimer = T.upshiftTime; }
+      if (this.gear < D.maxGear && rpmIn(this.gear) > upAt && rpmIn(this.gear + 1) > 1100) { this.gear++; this.shiftTimer = T.upshiftTime; }
       else if (this.gear > 1 && rpmIn(this.gear) < downAt && rpmIn(this.gear - 1) < T.shiftRpm - 400) { this.gear--; this.shiftTimer = T.downshiftTime; }
     }
 
     // ----- steering & lateral grip -----
     // damage: a bent suspension pulls to one side, a bent wheel shimmies
-    const steerIn = input.steer + D.pull + (D.wobble ? D.wobble * 0.06 * Math.sin(performance.now() * 0.013) * Math.min(1, Math.abs(vf) / 10) : 0);
+    const steerIn = input.steer + D.pull + D.brakePull * brake + (D.wobble ? D.wobble * 0.06 * Math.sin(performance.now() * 0.013) * Math.min(1, Math.abs(vf) / 10) : 0);
     this.steer += (steerIn - this.steer) * Math.min(1, dt * T.steerRate);
     const absV = Math.abs(vf);
-    const steerAngle = (this.steer * T.maxSteer) / (1 + Math.max(0, absV - 5) / T.steerFalloff); // full lock at parking speeds, less at highway speeds (keyboard steering)
+    const steerAngle = (this.steer * T.maxSteer * D.steerLock) / (1 + Math.max(0, absV - 5) / T.steerFalloff); // full lock at parking speeds, less at highway speeds (keyboard steering)
     let yaw = (vf / SC430.wheelbaseM) * Math.tan(steerAngle);
     const latMax = (input.handbrake ? T.latG * 1.45 : T.latG) * mu * G; // cornering grip
     const maxYaw = Math.min(2.5, latMax / Math.max(absV, 0.5));
@@ -557,6 +656,7 @@ export class PlayerCar {
     if (g === null) return;
     this.vy = (this.vy || 0) - 22 * dt;
     if (g >= this.y + this.vy * dt) {
+      if (this.vy < -9) env.crash?.landing(-this.vy); // came down hard: underside, suspension, tires
       this.y = this.y + (g - this.y) * Math.min(1, dt * 20);
       if (Math.abs(g - this.y) > 0.6) this.y = g;
       this.vy = 0;
@@ -691,7 +791,7 @@ export class PlayerCar {
         if (t.J > 0) {
           const rx = t.pcx - this.x, rz = t.pcz - this.z;
           this.applyImpulse(t.J * t.nx, t.J * t.nz, rz, -rx);
-          if (t.impact > 1.2) env.crash?.impact({ x: t.pcx, z: t.pcz, nx: t.nx, nz: t.nz, impact: t.impact, kind: 'car' });
+          if (t.impact > 1.2) env.crash?.impact({ x: t.pcx, z: t.pcz, nx: t.nx, nz: t.nz, impact: t.impact, kind: 'car', mass: t.car?.mass });
         }
         hitSpeed = Math.max(hitSpeed, t.impact);
       }
@@ -704,8 +804,8 @@ export class PlayerCar {
     // physics has it (CG 0.5 m up, lowest corner on the ground)
     const ro = this.roll || 0, sr = Math.sin(ro);
     const side = CG_H * sr, lift = (this.lift || 0) + CG_H * (1 - Math.cos(ro));
-    this.group.position.set(this.x + Math.cos(this.heading) * side, this.y + lift, this.z - Math.sin(this.heading) * side);
-    this.group.rotation.set(this.bodyPitch + (this.slopePitch || 0) + (this.jPitch || 0), this.heading, this.bodyRoll + (this.jRoll || 0) + (this.roll || 0), 'YXZ');
+    this.group.position.set(this.x + Math.cos(this.heading) * side, this.y + lift + (this.dmgLift || 0), this.z - Math.sin(this.heading) * side);
+    this.group.rotation.set(this.bodyPitch + (this.slopePitch || 0) + (this.jPitch || 0) + (this.dmgPitch || 0), this.heading, this.bodyRoll + (this.jRoll || 0) + (this.roll || 0) + (this.dmgRoll || 0), 'YXZ');
     for (const w of this.wheels) {
       w.spin.rotation.x = this.wheelSpin;
       w.pivot.rotation.y = w.front ? -this.steer * 0.45 : 0;

@@ -7,7 +7,7 @@
 import { mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { toLon, toLat, toX, toZ, HALF_W, HALF_H, M_PER_DEG_LAT, M_PER_DEG_LON } from './geo.mjs';
+import { toLon, toLat, toX, toZ, EXTENT, M_PER_DEG_LAT, M_PER_DEG_LON } from './geo.mjs';
 import jpeg from 'jpeg-js';
 
 // The server occasionally returns a tile with a solid magenta block (a rendering glitch). Real
@@ -65,17 +65,19 @@ const manifestPath = join(OUT, 'manifest.json');
 const manifest = (!force && (await exists(manifestPath))) ? JSON.parse(await readFile(manifestPath, 'utf8')) : { tile: TILE, tiles: {} };
 manifest.source = 'USDA NAIP imagery via USGS The National Map (public domain)';
 
-// overview
-if (force || !manifest.overview) {
+// overview (refetched whenever the map extent changes; tiles are keyed by fixed 500 m cells and stay cached)
+const ov = { west: toLon(EXTENT.minX - 300), east: toLon(EXTENT.maxX + 300), north: toLat(EXTENT.minZ - 300), south: toLat(EXTENT.maxZ + 300) };
+const ovKey = [ov.west, ov.south, ov.east, ov.north].map((v) => v.toFixed(5)).join(',');
+if (force || !manifest.overview || manifest.overview.bbox !== ovKey) {
   console.log('overview…');
-  const r = await exportImage({ west: toLon(-HALF_W - 300), east: toLon(HALF_W + 300), north: toLat(-HALF_H - 300), south: toLat(HALF_H + 300), w: 2048, h: Math.round(2048 / (((2 * HALF_W + 600) / M_PER_DEG_LON) / ((2 * HALF_H + 600) / M_PER_DEG_LAT))), bands: '0,1,2', quality: 78 });
+  const r = await exportImage({ ...ov, w: 2048, h: Math.round(2048 / ((ov.east - ov.west) / (ov.north - ov.south))), bands: '0,1,2', quality: 78 });
   await writeFile(join(OUT, 'overview.jpg'), r.buf);
-  manifest.overview = { file: 'overview.jpg', ...toLocal(r.extent), w: r.width, h: r.height };
+  manifest.overview = { file: 'overview.jpg', ...toLocal(r.extent), w: r.width, h: r.height, bbox: ovKey };
   await writeFile(manifestPath, JSON.stringify(manifest));
 }
 
-const i0 = Math.floor(-HALF_W / TILE), i1 = Math.ceil(HALF_W / TILE) - 1;
-const j0 = Math.floor(-HALF_H / TILE), j1 = Math.ceil(HALF_H / TILE) - 1;
+const i0 = Math.floor(EXTENT.minX / TILE), i1 = Math.ceil(EXTENT.maxX / TILE) - 1;
+const j0 = Math.floor(EXTENT.minZ / TILE), j1 = Math.ceil(EXTENT.maxZ / TILE) - 1;
 const jobs = [];
 for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) jobs.push([i, j]);
 console.log(`${jobs.length} tiles of ${TILE} m at ${PX_W}x${PX_H}px`);

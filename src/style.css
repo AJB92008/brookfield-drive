@@ -101,13 +101,37 @@ kbd { display: inline-block; min-width: 1.5em; padding: 0 0.35em; margin: 0 0.1e
 @media (max-width: 700px) { #limit-sign { right: 10px; bottom: calc(132px + env(safe-area-inset-bottom, 0px)); transform: scale(0.85); transform-origin: bottom right; } #wanted { top: calc(110px + env(safe-area-inset-top, 0px)); min-width: 220px; } }
 
 /* damage meter (left of the speedometer) */
-#damage { position: absolute; right: calc(232px + env(safe-area-inset-right, 0px)); bottom: calc(30px + env(safe-area-inset-bottom, 0px)); display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px; background: rgba(12,16,20,0.55); backdrop-filter: blur(4px); }
-#damage svg { width: 30px; height: 52px; }
-#damage .d-text { display: flex; flex-direction: column; line-height: 1.15; }
-#damage .d-text b { font-size: 20px; }
-#damage .d-text span { font-size: 11px; opacity: 0.75; text-transform: uppercase; letter-spacing: 0.06em; }
-#damage .d-text .d-hint { opacity: 0.55; text-transform: none; letter-spacing: 0; }
-@media (max-width: 700px) { #damage { right: 160px; padding: 6px 8px; } #damage .d-hint { display: none; } }
+#damage { position: absolute; right: calc(232px + env(safe-area-inset-right, 0px)); bottom: calc(30px + env(safe-area-inset-bottom, 0px)); width: 268px; padding: 8px 10px; border-radius: 12px; background: rgba(12,16,20,0.72); backdrop-filter: blur(4px); font-size: 11px; }
+#damage .dmg-head { display: flex; align-items: baseline; gap: 6px; }
+#damage .dmg-head b { font-size: 18px; }
+#damage .dmg-head > span { opacity: 0.7; text-transform: uppercase; letter-spacing: 0.06em; }
+#dmg-lights { margin-left: auto; display: flex; gap: 3px; }
+#dmg-lights b { font-size: 9px; font-weight: 800; padding: 1px 4px; border-radius: 3px; color: rgba(255,255,255,0.22); border: 1px solid rgba(255,255,255,0.12); letter-spacing: 0.04em; }
+#dmg-lights b.amber { color: #1a1200; background: #f0b429; border-color: #f0b429; }
+#dmg-lights b.red { color: #fff; background: #e5484d; border-color: #e5484d; animation: dmgblink 1s steps(2) infinite; }
+@keyframes dmgblink { 50% { opacity: 0.55; } }
+#damage .dmg-body { display: flex; gap: 8px; margin-top: 4px; }
+#damage svg { width: 40px; height: 73px; flex: none; }
+#damage svg rect, #damage svg path { stroke: rgba(0,0,0,0.35); stroke-width: 0.6; }
+#dmg-list { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+#dmg-list .dr { display: grid; grid-template-columns: 62px 34px 1fr; align-items: center; gap: 5px; line-height: 1.25; }
+#dmg-list .dr span { opacity: 0.8; }
+#dmg-list .dr i { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--c) var(--h), rgba(255,255,255,0.12) var(--h)); }
+#dmg-list .dr em { font-style: normal; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.85; }
+#dmg-list .dr.ok { --c: #3ddc84; } #dmg-list .dr.ok em { opacity: 0.45; }
+#dmg-list .dr.warn { --c: #f0b429; } #dmg-list .dr.warn em { color: #f6c96b; }
+#dmg-list .dr.bad { --c: #e5484d; } #dmg-list .dr.bad em { color: #ff8a8d; font-weight: 700; }
+#dmg-msg { margin-top: 5px; padding-top: 5px; border-top: 1px solid rgba(255,255,255,0.1); opacity: 0.75; line-height: 1.3; }
+#dmg-msg.alert { opacity: 1; color: #ffd27a; }
+#dmg-msg kbd { font-size: 9px; }
+/* cracked windshield seen from the driver's seat (hood camera) */
+#crack-overlay { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+#crack-overlay[hidden] { display: none; }
+#repair-bar { position: absolute; left: 50%; bottom: calc(150px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); width: min(320px, 80vw); padding: 8px 12px; border-radius: 10px; background: rgba(12,16,20,0.8); text-align: center; font-size: 13px; }
+#repair-bar i { display: block; height: 6px; margin-top: 6px; border-radius: 3px; background: linear-gradient(to right, #3ddc84 var(--p), rgba(255,255,255,0.15) var(--p)); }
+#fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 0.35s; z-index: 20; }
+#fade.on { opacity: 1; }
+@media (max-width: 700px) { #damage { right: 160px; width: 150px; padding: 6px 8px; } #dmg-list, #dmg-msg { display: none; } }
 
 /* missions */
 #missions { pointer-events: auto; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(600px, 94vw); max-height: 88vh; display: flex; flex-direction: column; padding: 16px 18px; border-radius: 14px; background: rgba(12,16,20,0.92); box-shadow: 0 10px 40px rgba(0,0,0,0.5); z-index: 5; }

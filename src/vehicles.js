@@ -182,11 +182,33 @@ export const VEHICLE_TYPES = [
 export const TYPE = Object.fromEntries(VEHICLE_TYPES.map((t) => [t.id, t]));
 export const TRAILER = { id: 'trailer', build: trailer };
 
+// Crash damage, per instance (instanced attribute `aDent`: x = front, y = rear, z = left, w = right crush in m).
+// Every vertex knows where it sits on the vehicle (`aNorm`: x and z -1..1 across the width and length, y 0..1
+// up the height), so a crushed end is pushed in, the roofline over it sags and the metal crumples.
+const DENT_HEAD = 'attribute vec3 aNorm;\nattribute vec4 aDent;\n';
+const DENT_VERT = `
+{
+  float fr = smoothstep(0.3, 1.0, aNorm.z), rr = smoothstep(0.3, 1.0, -aNorm.z);
+  float lf = smoothstep(0.35, 1.0, aNorm.x), rt = smoothstep(0.35, 1.0, -aNorm.x);
+  float mid = 1.0 - 0.6 * abs(aNorm.z);
+  transformed.z += aDent.y * rr - aDent.x * fr;
+  transformed.x += (aDent.w * rt - aDent.z * lf) * mid;
+  float crush = aDent.x * fr + aDent.y * rr + (aDent.z * lf + aDent.w * rt) * mid;
+  transformed.y -= crush * 0.2 * smoothstep(0.35, 0.9, aNorm.y);
+  transformed.y += crush * 0.07 * sin(position.x * 9.0 + position.z * 7.0);
+}`;
+function addDent(sh) {
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', `#include <common>\n${DENT_HEAD}`)
+    .replace('#include <begin_vertex>', `#include <begin_vertex>\n${DENT_VERT}`);
+}
+
 // Lambert material whose emissive picks up per-instance lamp states (instanced attribute `lampState`:
 // x = brake 0..1, y = left signal on, z = right signal on, w = police bar 0 off / 1 red / 2 blue).
 export function makeLampMaterial() {
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
   mat.onBeforeCompile = (sh) => {
+    addDent(sh);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nattribute float lamp;\nattribute vec4 lampState;\nvarying float vLampId;\nvarying vec4 vLampState;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLampId = lamp;\nvLampState = lampState;');
@@ -205,18 +227,31 @@ vec3 lampGlow(float id, vec4 st) {
 }`)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += lampGlow(vLampId, vLampState);');
   };
-  mat.customProgramCacheKey = () => 'vehicle-lamps-v1';
+  mat.customProgramCacheKey = () => 'vehicle-lamps-dent-v2';
   return mat;
 }
 
 // One body + one detail InstancedMesh per vehicle type (+ trailers), each with `count` slots.
 export function makeFleetMeshes(scene, count) {
   const bodyMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  bodyMat.onBeforeCompile = addDent;
+  bodyMat.customProgramCacheKey = () => 'vehicle-body-dent-v1';
   const lampMat = makeLampMaterial();
   const meshes = {};
   for (const t of [...VEHICLE_TYPES, TRAILER]) {
     const { body, details } = t.build();
     details.setAttribute('lampState', new THREE.InstancedBufferAttribute(new Float32Array(count * 4), 4));
+    // where each vertex sits on this vehicle (the body's box, shared by its details) + the shared crush state
+    body.computeBoundingBox();
+    const bb = body.boundingBox, hw = Math.max(bb.max.x, -bb.min.x), hl = Math.max(bb.max.z, -bb.min.z), ht = bb.max.y || 1;
+    for (const g of [body, details]) {
+      const pa = g.attributes.position.array, nrm = new Float32Array(pa.length);
+      for (let i = 0; i < pa.length; i += 3) { nrm[i] = pa[i] / hw; nrm[i + 1] = pa[i + 1] / ht; nrm[i + 2] = pa[i + 2] / hl; }
+      g.setAttribute('aNorm', new THREE.BufferAttribute(nrm, 3));
+    }
+    const dent = new THREE.InstancedBufferAttribute(new Float32Array(count * 4), 4);
+    body.setAttribute('aDent', dent);
+    details.setAttribute('aDent', dent);
     const b = new THREE.InstancedMesh(body, bodyMat, count);
     const d = new THREE.InstancedMesh(details, lampMat, count);
     b.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3).fill(1), 3);
@@ -226,7 +261,7 @@ export function makeFleetMeshes(scene, count) {
       m.count = 0;
       scene.add(m);
     }
-    meshes[t.id] = { body: b, details: d, lamps: details.attributes.lampState, n: 0 };
+    meshes[t.id] = { body: b, details: d, lamps: details.attributes.lampState, dent, n: 0 };
   }
   return meshes;
 }

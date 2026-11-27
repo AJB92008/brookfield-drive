@@ -9,6 +9,7 @@
   </head>
   <body>
     <canvas id="scene"></canvas>
+    <canvas id="crack-overlay" hidden></canvas>
 
     <div id="loading">
       <div class="title">BROOKFIELD DRIVE</div>
@@ -27,15 +28,28 @@
       <div id="traffic-count"></div>
 
       <div id="damage" hidden>
-        <svg viewBox="0 0 40 70" aria-hidden="true">
-          <rect id="dz-front" x="8" y="2" width="24" height="15" rx="6" />
-          <rect id="dz-left" x="3" y="19" width="8" height="32" rx="3" />
-          <rect id="dz-right" x="29" y="19" width="8" height="32" rx="3" />
-          <rect id="dz-rear" x="8" y="53" width="24" height="15" rx="6" />
-          <rect x="13" y="22" width="14" height="26" rx="3" fill="rgba(255,255,255,0.08)" />
-        </svg>
-        <div class="d-text"><b id="damage-pct">0%</b><span>damage</span><span class="d-hint">R repairs</span></div>
+        <div class="dmg-head"><b id="damage-pct">0%</b><span>damage</span><div id="dmg-lights"></div></div>
+        <div class="dmg-body">
+          <svg viewBox="0 0 44 80" aria-hidden="true">
+            <rect id="dt-0" x="1" y="13" width="6" height="12" rx="2" />
+            <rect id="dt-1" x="37" y="13" width="6" height="12" rx="2" />
+            <rect id="dt-2" x="1" y="55" width="6" height="12" rx="2" />
+            <rect id="dt-3" x="37" y="55" width="6" height="12" rx="2" />
+            <path id="dz-FL" d="M8 15 Q8 2 17 2 L17 16 L8 16 Z" />
+            <rect id="dz-F" x="17.5" y="2" width="9" height="14" />
+            <path id="dz-FR" d="M36 15 Q36 2 27 2 L27 16 L36 16 Z" />
+            <rect id="dz-L" x="8" y="16.5" width="6" height="47" />
+            <rect id="dz-R" x="30" y="16.5" width="6" height="47" />
+            <rect id="dz-roof" x="15" y="26" width="14" height="28" rx="3" />
+            <path id="dz-RL" d="M8 65 Q8 78 17 78 L17 64 L8 64 Z" />
+            <rect id="dz-B" x="17.5" y="64" width="9" height="14" />
+            <path id="dz-RR" d="M36 65 Q36 78 27 78 L27 64 L36 64 Z" />
+          </svg>
+          <div id="dmg-list"></div>
+        </div>
+        <div id="dmg-msg"></div>
       </div>
+      <div id="repair-bar" hidden></div>
 
       <div id="missions" hidden>
         <div class="ms-title">Missions <div id="missions-summary"></div></div>
@@ -94,7 +108,8 @@
         <div><kbd>W</kbd><kbd>↑</kbd> gas &nbsp; <kbd>S</kbd><kbd>↓</kbd> brake / reverse</div>
         <div><kbd>A</kbd><kbd>D</kbd><kbd>←</kbd><kbd>→</kbd> steer &nbsp; <kbd>Space</kbd> handbrake</div>
         <div><kbd>N</kbd> missions &nbsp; <kbd>G</kbd> ghost &nbsp; <kbd>C</kbd> camera &nbsp; <kbd>V</kbd> look at the car &nbsp; <kbd>M</kbd> city map</div>
-        <div><kbd>R</kbd> back on the road (repairs the car) &nbsp; <kbd>T</kbd> traffic on/off</div>
+        <div><kbd>R</kbd> back on the road &nbsp; <kbd>F</kbd> tow (car can't drive) &nbsp; <kbd>T</kbd> traffic on/off</div>
+        <div>Repairs: stop in the green ring at a repair shop (wrench on the map)</div>
         <div class="help-note">Police chase you for going 15+ over the limit or crashing near them. Get far away to escape.</div>
         <div><kbd>P</kbd> photoreal 3D city / classic &nbsp; <kbd>I</kbd> car specs &nbsp; <kbd>K</kbd> stock / sport tune</div>
         <div><kbd>H</kbd> hide this</div>
@@ -113,10 +128,11 @@
     </div>
 
     <div id="bigmap">
-      <div class="caption">City of Brookfield, WI — click anywhere to teleport · <kbd>M</kbd> to close</div>
+      <div class="caption">Brookfield &amp; Waukesha, WI — click anywhere to teleport · <kbd>M</kbd> to close</div>
       <canvas id="bigmap-canvas"></canvas>
     </div>
 
     <script type="module" src="/src/main.js"></script>
-  </body>
+    <div id="fade"></div>
+</body>
 </html>

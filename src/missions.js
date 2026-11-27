@@ -259,7 +259,9 @@ function makeBeacon(color) {
 
 // ------------------------------------------------------------------ ghost car
 function makeGhostModel() {
-  const { group } = buildModel(null);
+  const { group, parts } = buildModel(null);
+  // the loose-panel copies sit on top of the body: hide them so the see-through ghost isn't patchy
+  for (const p of Object.values(parts.panels)) p.pivot.visible = false;
   const mat = new THREE.MeshBasicMaterial({ color: 0x7fe3ff, transparent: true, opacity: 0.45, depthWrite: false, toneMapped: false });
   group.traverse((o) => { if (o.isMesh) { o.material = mat; o.castShadow = false; o.receiveShadow = false; o.renderOrder = 4; } });
   group.visible = false;

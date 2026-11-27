@@ -738,6 +738,53 @@ export async function buildWorld(map, roadIndex, bindex, scene, progress = async
   stats.meshes = group.children.length;
   // Trunks are invisible at a distance; skip drawing them beyond ~700 m.
   const trunkMeshes = group.children.filter((m) => m.userData?.trunk);
-  const updateLod = (x, z) => { for (const m of trunkMeshes) m.visible = Math.hypot(m.userData.cx - x, m.userData.cz - z) < 700; };
+  // 1 km cells: every mesh that sits in one place goes into its cell's group, and cells past the view distance
+  // are hidden, so the renderer skips them without visiting each mesh. (Brookfield + Waukesha is ~20k meshes;
+  // a couple of thousand are ever near the camera.) Map-wide meshes (the fallback ground, areas) stay put.
+  const CELL_M = 1000, VIEW = 1650 + CELL_M * 0.75 + 150;
+  const cellMap = new Map();
+  const loose = [...group.children.filter((m) => m.isMesh), ...(furniture?.group.children || [])];
+  for (const m of loose) {
+    let c, r;
+    if (m.isInstancedMesh) { if (!m.boundingSphere) m.computeBoundingSphere(); c = m.boundingSphere.center; r = m.boundingSphere.radius; } else {
+      if (!m.geometry.boundingSphere) m.geometry.computeBoundingSphere();
+      c = m.geometry.boundingSphere.center; r = m.geometry.boundingSphere.radius;
+    }
+    if (!(r < 1500)) continue;
+    const k = `${Math.floor(c.x / CELL_M)},${Math.floor(c.z / CELL_M)}`;
+    let cell = cellMap.get(k);
+    if (!cell) {
+      cell = new THREE.Group();
+      cell.name = 'cell';
+      cell.matrixAutoUpdate = false;
+      cell.userData = { cx: (Math.floor(c.x / CELL_M) + 0.5) * CELL_M, cz: (Math.floor(c.z / CELL_M) + 0.5) * CELL_M };
+      cellMap.set(k, cell);
+      group.add(cell);
+    }
+    cell.add(m);
+  }
+  const cells = [...cellMap.values()];
+  stats.cells = cells.length;
+  // Static world geometry never changes once built, so after a buffer is on the GPU its CPU copy is dropped
+  // (three.js otherwise keeps both; for this map that's ~0.8 GB of JS memory and long GC pauses). Street-name
+  // signs keep theirs: a knocked-over sign is re-posed by editing its vertices.
+  const release = function () { this.array = null; };
+  for (const c of cells) {
+    for (const m of c.children) {
+      if (m.userData.orig || !m.geometry) continue;
+      for (const a of Object.values(m.geometry.attributes)) a.onUpload(release);
+      m.geometry.index?.onUpload(release);
+    }
+  }
+  const updateLod = (x, z) => {
+    for (const m of trunkMeshes) m.visible = Math.hypot(m.userData.cx - x, m.userData.cz - z) < 700;
+    for (const c of cells) c.visible = Math.hypot(c.userData.cx - x, c.userData.cz - z) < VIEW;
+  };
+  // Nothing in the world moves: every object in it has an identity transform (geometry is in world
+  // coordinates; poles tip over through instance matrices). So its matrices are settled once here and the
+  // per-frame scene-graph update skips the whole subtree, which otherwise recomputes ~20k matrices a frame.
+  // (Things added later, the streamed ground tiles, are identity too.)
+  group.updateMatrixWorld(true);
+  group.updateMatrixWorld = () => {};
   return { group, stats, treePoints: trees.points, fronts: blds.fronts, updateLod, furniture };
 }

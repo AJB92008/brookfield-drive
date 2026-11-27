@@ -4,7 +4,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BBOX, LAT0, LON0, M_PER_DEG_LAT, M_PER_DEG_LON, toX, toZ } from './geo.mjs';
+import { BBOX, LAT0, LON0, M_PER_DEG_LAT, M_PER_DEG_LON, toX, toZ, EXTENT } from './geo.mjs';
 import { analyzeAerial } from './aerial-analysis.mjs';
 import { computeFurniture } from './street-furniture.mjs';
 import { buildTerrain } from './terrain-build.mjs';
@@ -294,7 +294,8 @@ for (const e of boundsRaw.elements) {
     .filter((r) => r.length >= 6);
   let name = e.tags.name;
   if (e.tags.border_type === 'town' && !/^Town of/.test(name)) name = `Town of ${name}`;
-  if (rings.length) places.push({ n: name, city: e.id === 251870 ? 1 : 0, rings, holes });
+  // the two cities the map is built around (Brookfield, Waukesha): their limits are drawn on the maps
+  if (rings.length) places.push({ n: name, city: e.id === 251870 || e.id === 251879 ? 1 : 0, rings, holes });
 }
 
 // Spawn: on West Bluemound Rd near the Moorland Rd intersection (Brookfield Square).
@@ -382,13 +383,11 @@ try {
   console.log('No terrain (run npm run fetch-terrain) - world stays flat');
 }
 
-const halfW = (M_PER_DEG_LON * (BBOX.east - BBOX.west)) / 2;
-const halfH = (M_PER_DEG_LAT * (BBOX.north - BBOX.south)) / 2;
 const map = {
   attribution: '© OpenStreetMap contributors (ODbL)',
   generated: new Date().toISOString(),
   origin: { lat: LAT0, lon: LON0 },
-  bounds: { minX: r1(-halfW), maxX: r1(halfW), minZ: r1(-halfH), maxZ: r1(halfH) },
+  bounds: { minX: r1(EXTENT.minX), maxX: r1(EXTENT.maxX), minZ: r1(EXTENT.minZ), maxZ: r1(EXTENT.maxZ) },
   spawn,
   nodes,
   roads,
@@ -418,7 +417,7 @@ if (!process.argv.includes('--skip-ground')) {
     console.log('No aerial imagery - skipping stylized ground');
   }
 }
-console.log(`  size: ${(json.length / 1e6).toFixed(2)} MB, extent ${(halfW * 2 / 1000).toFixed(1)} x ${(halfH * 2 / 1000).toFixed(1)} km`);
+console.log(`  size: ${(json.length / 1e6).toFixed(2)} MB, extent ${((EXTENT.maxX - EXTENT.minX) / 1000).toFixed(1)} x ${((EXTENT.maxZ - EXTENT.minZ) / 1000).toFixed(1)} km`);
 console.log(`  nodes: ${nodes.length / 2}, roads: ${roads.length}, rails: ${rails.length}`);
 console.log('  roads by type:', stats.roadsByType);
 console.log(`  buildings: ${buildings.length} (skipped ${skippedBuildings})`);

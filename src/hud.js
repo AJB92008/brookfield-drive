@@ -1,7 +1,9 @@
 // HUD: speedometer, street-name sign, place name, rotating minimap, full map with click-to-teleport.
 import { pointInRing } from './spatial.js';
 
-const MPP = 4; // meters per pixel of the pre-rendered map
+// meters per pixel of the pre-rendered map: 4, or coarser when the map is big enough that the canvas would pass
+// ~16M pixels (iOS Safari refuses bigger canvases). Set by renderBaseMap().
+let MPP = 4;
 
 const ROAD_STYLE = {
   motorway: ['#f2914a', 1.6], motorway_link: ['#f2914a', 1.2], trunk: ['#f2a65a', 1.5], trunk_link: ['#f2a65a', 1.1],
@@ -97,6 +99,7 @@ export class Hud {
 
   renderBaseMap() {
     const b = this.map.bounds;
+    MPP = Math.max(4, Math.ceil(Math.sqrt(((b.maxX - b.minX) * (b.maxZ - b.minZ)) / 16e6) * 4) / 4);
     const W = Math.ceil((b.maxX - b.minX) / MPP), H = Math.ceil((b.maxZ - b.minZ) / MPP);
     const c = document.createElement('canvas');
     c.width = W; c.height = H;
@@ -146,9 +149,8 @@ export class Hud {
         ctx.stroke();
       }
     }
-    // City of Brookfield limits
-    const city = this.map.places.find((p) => p.city);
-    if (city) {
+    // city limits of Brookfield and Waukesha
+    for (const city of this.map.places.filter((p) => p.city)) {
       ctx.strokeStyle = 'rgba(160, 190, 255, 0.75)';
       ctx.lineWidth = 2.5;
       ctx.setLineDash([10, 6]);
@@ -254,6 +256,20 @@ export class Hud {
       ctx.fillStyle = col; ctx.strokeStyle = '#fff'; ctx.lineWidth = (2 * this.miniDpr) / k;
       ctx.beginPath(); ctx.arc((dx - player.x) / MPP, (dz - player.z) / MPP, (7 * this.miniDpr) / k, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     }
+    if (this.shops) {
+      // repair shops: green wrench badges, drawn upright whatever the map rotation
+      const rr = (c / k) * 1.05; // map radius in base-map px
+      for (const s of this.shops) {
+        const x = (s.x - player.x) / MPP, z = (s.z - player.z) / MPP;
+        if (Math.hypot(x, z) > rr) continue;
+        ctx.save();
+        ctx.translate(x, z);
+        ctx.rotate(Math.PI - player.heading);
+        ctx.scale(this.miniDpr / k, this.miniDpr / k);
+        this.wrench(ctx, 7);
+        ctx.restore();
+      }
+    }
     if (traffic?.enabled) {
       ctx.fillStyle = '#7fd3ff';
       const dotR = 2.2 / k * this.miniDpr;
@@ -292,6 +308,20 @@ export class Hud {
     ctx.fillText('N', nx, ny);
   }
 
+  // green badge with a white wrench, radius r px, at the current origin
+  wrench(ctx, r) {
+    ctx.fillStyle = '#3ddc84';
+    ctx.strokeStyle = '#0d3b22';
+    ctx.lineWidth = r * 0.22;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.rotate(-Math.PI / 4);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(-r * 0.14, -r * 0.1, r * 0.28, r * 0.85);
+    ctx.beginPath(); ctx.arc(0, -r * 0.3, r * 0.36, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#3ddc84';
+    ctx.fillRect(-r * 0.12, -r * 0.75, r * 0.24, r * 0.42);
+  }
+
   toggleBig(force) {
     this.bigOpen = force ?? !this.bigOpen;
     this.bigWrap.classList.toggle('open', this.bigOpen);
@@ -319,6 +349,14 @@ export class Hud {
     const x = ((player.x - b.minX) / (b.maxX - b.minX)) * this.big.width;
     const y = ((player.z - b.minZ) / (b.maxZ - b.minZ)) * this.big.height;
     const a = 11 * (this.big.width / parseFloat(this.big.style.width));
+    if (this.shops) {
+      for (const s of this.shops) {
+        ctx.save();
+        ctx.translate(((s.x - b.minX) / (b.maxX - b.minX)) * this.big.width, ((s.z - b.minZ) / (b.maxZ - b.minZ)) * this.big.height);
+        this.wrench(ctx, a * 0.62);
+        ctx.restore();
+      }
+    }
     if (this.route) {
       const sxF = this.big.width / (b.maxX - b.minX), szF = this.big.height / (b.maxZ - b.minZ);
       const r = this.route, pts = r.pts, col = `#${r.color.toString(16).padStart(6, '0')}`;

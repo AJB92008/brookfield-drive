@@ -86,9 +86,10 @@ export function carveRoadBeds(orig, meta, nodes, roads) {
       if (i > 0) { const sx = pnx + nx, sz = pnz + nz, sl = Math.hypot(sx, sz); if (sl < 1e-4 || (sx * pnx + sz * pnz) / sl < 0.8) disc(ax, az, hw, h[i]); }
       pnx = nx; pnz = nz;
       const along = Math.max(2, Math.ceil(L / 2));
+      const nv = Math.max(2, Math.ceil(hw / 1.5)); // across: at most 1.5 m apart, so wide roads don't miss a grid fold
       for (let a = 0; a <= along; a++) {
         const u = a / along, x = ax + (bx - ax) * u, z = az + (bz - az) * u, hh = h[i] + (h[i + 1] - h[i]) * u;
-        for (const v of [-1, -0.5, 0, 0.5, 1]) clampAt(x + nx * hw * v, z + nz * hw * v, hh);
+        for (let j = -nv; j <= nv; j++) clampAt(x + (nx * hw * j) / nv, z + (nz * hw * j) / nv, hh);
       }
     }
   }

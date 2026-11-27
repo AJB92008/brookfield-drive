@@ -469,6 +469,7 @@ export class Traffic {
       x: 0, z: 0, heading: 0, y: 0, ty: 0, pitch: 0, yKnown: !this.groundInit,
       trailer: null, vx: 0, vz: 0, w: 0, restT: 0, blendT: 0, blendFrom: null,
       pursuit: false, chaseStuck: 0, lightsT: 0,
+      dent: [0, 0, 0, 0], dmg: 0, wrecked: false, fire: 0, // crash damage: crush front / rear / left / right (m)
     };
     car.speed = Math.min(e.speed * car.v0f, car.maxV) * 0.85;
     car.next = this.chooseNext(e, car);
@@ -1004,6 +1005,20 @@ export class Traffic {
     return Infinity;
   }
 
+  // is lane L of edge e blocked by a crashed car within 70 m ahead of us?
+  laneBlocked(car, e, L) {
+    const q = this.pointOn(e, car.s, this.laneOffset(e, L));
+    const hx = Math.sin(car.heading), hz = Math.cos(car.heading);
+    for (const o of this.offRoad) {
+      if (o === car || o.mode !== 'crash') continue;
+      const dx = o.x - q.x, dz = o.z - q.z;
+      const along = dx * hx + dz * hz;
+      if (along < 0 || along > 70) continue;
+      if (Math.abs(-dx * hz + dz * hx) < (car.width + o.width) / 2 + 0.4) return true;
+    }
+    return false;
+  }
+
   // crashed cars and chasing police lying across our path
   obstacleAcc(car, v, v0) {
     let acc = Infinity;
@@ -1104,6 +1119,17 @@ export class Traffic {
     car.lcTimer -= dt;
     if (car.lcTimer > 0) return;
     car.lcTimer = 0.6 + Math.random() * 0.6;
+    // a wreck blocking this lane ahead: move over to an open lane (forced, like a lane drop)
+    if (this.offRoad.length && this.laneBlocked(car, e, car.lane)) {
+      for (const L of [car.lane + 1, car.lane - 1]) {
+        if (L < 0 || L >= e.lanes || this.laneBlocked(car, e, L)) continue;
+        if (this.mobil(car, e, n, ti, L, true)) {
+          car.lc = { fromLane: car.lane, fromOff: car.off, t: 0, delay: 0.3, dur: 2.4 };
+          car.lane = L;
+          return;
+        }
+      }
+    }
     const v = car.speed;
     const dur = Math.min(4, 2.2 + v * 0.05) * (car.pers.id === 'aggressive' ? 0.75 : 1);
     if (car.s < 4 || distEnd < v * (dur + 0.7) + 6) return;
@@ -1256,6 +1282,30 @@ export class Traffic {
   }
 
   // ------------------------------------------------------------------ crashes
+  // a hit that changed the car's velocity by dv (m/s) at world point (cx, cz): crush that end or side.
+  // Bad enough and the car is wrecked: it stays where it stopped (hazards on, smoking) instead of driving off.
+  damageCar(car, cx, cz, dv, vx = 0, vz = 0) {
+    if (dv < 1.2) return;
+    const h = car.heading, dx = cx - car.x, dz = cz - car.z;
+    const along = dx * Math.sin(h) + dz * Math.cos(h), left = dx * Math.cos(h) - dz * Math.sin(h);
+    const k = Math.abs(along) > car.len * 0.3 ? (along > 0 ? 0 : 1) : left > 0 ? 2 : 3;
+    const maxC = k < 2 ? Math.min(1.1, car.len * 0.22) : 0.38;
+    // crush and wear go with the energy of the hit (dv squared): parking-lot bumps barely mark a car, while
+    // a single ~11 m/s (25 mph) change of speed wrecks it. Police cruisers (push bars, heavy-duty parts) take
+    // about twice that, so nudging you during a chase doesn't finish them.
+    const e = (dv - 1.2) ** 2, tough = car.police ? 1.8 : 1;
+    car.dent[k] = Math.min(maxC, car.dent[k] + (e * (k < 2 ? 0.012 : 0.007)) / (car.police ? 1.4 : 1));
+    car.dmg += e;
+    if (!car.wrecked && (car.dmg > 90 * tough || car.dent[0] > 0.55 * tough || car.dent[1] > 0.6 * tough || (!car.police && car.dent[k] >= maxC * 0.98))) {
+      car.wrecked = true;
+      car.hazard = true;
+      if (car.mode !== 'crash') this.enterCrash(car, vx, vz);
+      if (car.pursuit) this.endPursuit(car); // after enterCrash, so it isn't put back on the road
+      // a caved-in front end sometimes catches fire
+      if (car.dent[0] > 0.75 && Math.random() < 0.25) car.fire = 1;
+    }
+  }
+
   enterCrash(car, vx, vz) {
     this.release(car);
     if (car.mode === 'drive') {
@@ -1277,6 +1327,12 @@ export class Traffic {
     this.wallBounce(car, 0.3);
     car.speed = sp;
     if (sp < 0.2 && Math.abs(car.w) < 0.05) car.restT += dt;
+    if (car.wrecked) {
+      // a wreck waits for the tow truck: gone once you're out of sight of it, or after a while once you've moved on
+      const far = Math.hypot(car.x - this.player.x, car.z - this.player.z);
+      car.hazard = true;
+      return !(far > 160 || (car.restT > 45 && far > 70) || (car.restT > 90 && far > 25));
+    }
     if (car.restT > 4.5) {
       const far = Math.hypot(car.x - this.player.x, car.z - this.player.z);
       if (far > 160) return false;
@@ -1295,7 +1351,10 @@ export class Traffic {
       car.x += r.x - cx; car.z += r.z - cz;
       if (car.mode === 'crash') {
         const vn = car.vx * r.nx + car.vz * r.nz;
-        if (vn < 0) { car.vx -= (1 + restitution) * vn * r.nx; car.vz -= (1 + restitution) * vn * r.nz; car.w *= 0.6; }
+        if (vn < 0) {
+          car.vx -= (1 + restitution) * vn * r.nx; car.vz -= (1 + restitution) * vn * r.nz; car.w *= 0.6;
+          this.damageCar(car, cx - r.nx * car.width * 0.5, cz - r.nz * car.width * 0.5, -(1 + restitution) * vn);
+        }
       } else car.speed *= 0.6;
     }
   }
@@ -1373,6 +1432,7 @@ export class Traffic {
     const J = (-(1 + 0.25 * Math.exp(vn / 14) + 0.04) * vn) / (1 / otherMass + 1 / car.mass + otherRot);
     const [vx, vz] = this.velocityOf(car);
     const dvA = J / car.mass;
+    this.damageCar(car, cx, cz, dvA, vx, vz);
     const big = car.type.big && car.mode === 'drive';
     if (car.mode === 'crash' || (!big && dvA > 0.6) || dvA > 1.6) {
       if (car.mode !== 'crash') { this.enterCrash(car, vx, vz); car.w = 0; }
@@ -1719,7 +1779,8 @@ export class Traffic {
     const flash = Math.floor(this.time * 7) % 2 === 0 ? 1 : 2;
     const blobs = this.blobMesh.visible;
     let nb = 0;
-    const put = (M, x, y, z, heading, pitch, color, brake, left, right, bar) => {
+    const NODENT = [0, 0, 0, 0];
+    const put = (M, x, y, z, heading, pitch, color, brake, left, right, bar, dent = NODENT) => {
       const i = M.n++;
       e.set(pitch, heading, 0, 'YXZ');
       q.setFromEuler(e);
@@ -1729,13 +1790,14 @@ export class Traffic {
       M.details.setMatrixAt(i, m);
       M.body.setColorAt(i, this._c.setHex(color));
       M.lamps.setXYZW(i, brake, left, right, bar);
+      M.dent.setXYZW(i, dent[0], dent[1], dent[2], dent[3]);
     };
     for (const car of this.cars) {
       if (!car.yKnown) continue;
       const left = blink && (car.blink === -1 || car.hazard) ? 1 : 0;
       const right = blink && (car.blink === 1 || car.hazard) ? 1 : 0;
       const bar = car.police && (car.pursuit || car.lightsT > 0) ? flash : 0;
-      put(this.meshes[car.type.id], car.x, car.y, car.z, car.heading, car.pitch, car.color, car.brake, left, right, bar);
+      put(this.meshes[car.type.id], car.x, car.y, car.z, car.heading, car.pitch, car.color, car.brake, left, right, bar, car.dent);
       if (car.trailer) {
         const t = car.trailer;
         put(this.meshes.trailer, t.x, t.y || car.y, t.z, t.heading, t.pitch, 0xeeeeee, car.brake, left, right, 0);
@@ -1758,6 +1820,7 @@ export class Traffic {
         M.details.instanceMatrix.needsUpdate = true;
         M.body.instanceColor.needsUpdate = true;
         M.lamps.needsUpdate = true;
+        M.dent.needsUpdate = true;
       }
     }
     this.blobMesh.count = nb;

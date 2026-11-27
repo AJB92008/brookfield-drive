@@ -5,25 +5,39 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fromArrayBuffer } from 'geotiff';
-import { toX, toZ, HALF_W, HALF_H } from './geo.mjs';
+import { toX, toZ, EXTENT } from './geo.mjs';
 
 const STEP = 10;
 const MARGIN = 600;
 
 export async function buildTerrain({ root, roads, nodes, spawn, log = console.log }) {
   const meta = JSON.parse(await readFile(join(root, 'data-raw', 'terrain.json'), 'utf8'));
-  const buf = await readFile(join(root, 'data-raw', 'terrain.tif'));
-  const tiff = await fromArrayBuffer(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-  const img = await tiff.getImage();
-  const [src] = await img.readRasters();
-  const W = img.getWidth(), H = img.getHeight();
-  const e = meta.extent;
-  const sMinX = toX(e.xmin), sMaxX = toX(e.xmax), sMinZ = toZ(e.ymax), sMaxZ = toZ(e.ymin);
+  // tiled (terrain-{i}-{j}.tif, overlapping) or the older single terrain.tif
+  const list = meta.tiles ?? [{ file: 'terrain.tif', extent: meta.extent }];
   let bad = 0;
-  for (let i = 0; i < src.length; i++) if (!(src[i] > -100 && src[i] < 9000)) { src[i] = NaN; bad++; }
+  const tiles = [];
+  for (const t of list) {
+    const buf = await readFile(join(root, 'data-raw', t.file));
+    const tiff = await fromArrayBuffer(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+    const img = await tiff.getImage();
+    const [src] = await img.readRasters();
+    const e = t.extent;
+    for (let i = 0; i < src.length; i++) if (!(src[i] > -100 && src[i] < 9000)) { src[i] = NaN; bad++; }
+    tiles.push({ src, W: img.getWidth(), H: img.getHeight(), sMinX: toX(e.xmin), sMaxX: toX(e.xmax), sMinZ: toZ(e.ymax), sMaxZ: toZ(e.ymin) });
+  }
+  // the tile in which (x,z) is deepest inside (tiles overlap, so a seam is never sampled at a tile's edge)
+  const tileAt = (x, z) => {
+    let best = tiles[0], bestD = -Infinity;
+    for (const t of tiles) {
+      const d = Math.min(x - t.sMinX, t.sMaxX - x, z - t.sMinZ, t.sMaxZ - z);
+      if (d > bestD) { bestD = d; best = t; }
+    }
+    return best;
+  };
 
   // bilinear sample of the source raster at local (x,z)
   const srcH = (x, z) => {
+    const { src, W, H, sMinX, sMaxX, sMinZ, sMaxZ } = tileAt(x, z);
     const fx = ((x - sMinX) / (sMaxX - sMinX)) * W - 0.5, fz = ((z - sMinZ) / (sMaxZ - sMinZ)) * H - 0.5;
     const x0 = Math.max(0, Math.min(W - 2, Math.floor(fx))), z0 = Math.max(0, Math.min(H - 2, Math.floor(fz)));
     const tx = Math.max(0, Math.min(1, fx - x0)), tz = Math.max(0, Math.min(1, fz - z0));
@@ -34,8 +48,8 @@ export async function buildTerrain({ root, roads, nodes, spawn, log = console.lo
   };
 
   // output grid with a small box filter (average of 9 samples per cell)
-  const minX = Math.floor((-HALF_W - MARGIN) / STEP) * STEP, minZ = Math.floor((-HALF_H - MARGIN) / STEP) * STEP;
-  const cols = Math.ceil((HALF_W + MARGIN - minX) / STEP) + 1, rows = Math.ceil((HALF_H + MARGIN - minZ) / STEP) + 1;
+  const minX = Math.floor((EXTENT.minX - MARGIN) / STEP) * STEP, minZ = Math.floor((EXTENT.minZ - MARGIN) / STEP) * STEP;
+  const cols = Math.ceil((EXTENT.maxX + MARGIN - minX) / STEP) + 1, rows = Math.ceil((EXTENT.maxZ + MARGIN - minZ) / STEP) + 1;
   const grid = new Float32Array(cols * rows);
   let minH = Infinity, maxH = -Infinity, holes = 0;
   for (let r = 0; r < rows; r++) {

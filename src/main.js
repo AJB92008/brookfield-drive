@@ -6,6 +6,7 @@ import { Traffic } from './traffic.js';
 import { Police } from './police.js';
 import { CrashSystem } from './crash.js';
 import { Missions } from './missions.js';
+import { RepairShops } from './shops.js';
 import { Hud } from './hud.js';
 import { Input } from './input.js';
 import { AerialGround } from './aerial.js';
@@ -80,7 +81,7 @@ async function main(saved = {}) {
   try {
     aerial = new AerialGround({ group: world.group, renderer });
     await aerial.load();
-    for (const m of world.group.children) if (m.name === 'areas' || m.name === 'roads-minor') m.visible = false;
+    world.group.traverse((m) => { if (m.isMesh && (m.name === 'areas' || m.name === 'roads-minor')) m.visible = false; }); // (meshes sit in 1 km cell groups)
     roads.minorAsGround = true; // driveways/parking aisles aren't drawn, so the car drives on the ground there
     const ground = world.group.getObjectByName('ground');
 
@@ -124,9 +125,10 @@ async function main(saved = {}) {
   const police = new Police({ traffic, hud, roads, map });
   // crashes: sparks / debris / smoke, damage, breakaway poles
   const crash = new CrashSystem({ scene, player, furniture: world.furniture, ground: null, hud });
+  crash.traffic = traffic;
   env.crash = crash;
   env.poles = crash.poles;
-  env.onFlipped = () => hud.toast(`Your car is on its ${Math.abs(player.roll) > 2.3 ? 'roof' : 'side'}. Press R to flip it back over (and fix it).`, 6000);
+  env.onFlipped = () => hud.toast(`Your car is on its ${Math.abs(player.roll) > 2.3 ? 'roof' : 'side'}. Press R to put it back on its wheels (it stays damaged).`, 6000);
   hud.onTeleport = (x, z) => { if (missions.running) missions.abort('Mission cancelled: you teleported.'); placeOnRoad(x, z, player.heading); afterMove(); };
 
   // ---------- photoreal (Google 3D Tiles via Cesium ion) vs classic (built from OSM) ----------
@@ -183,8 +185,16 @@ async function main(saved = {}) {
     mode: () => mode,
     damage: () => crash.damage?.total ?? 0,
   });
+  // repairs happen at real repair shops; a car that can't drive gets towed to the nearest one
+  const shops = new RepairShops({
+    map, roads, scene, player, hud, crash, ground: missionGround,
+    place: (x, z, h) => { hud.toggleBig(false); player.place(x, z, h); afterMove(); },
+    onTow: () => { if (missions.running) missions.abort('Mission over: towed.'); },
+  });
+  crash.damage.shopHint = () => shops.hint();
   let groundPendingSince = 0;
   function afterMove() {
+    world.updateLod(player.x, player.z); // show the cells around where we landed right away
     traffic.clear();
     traffic._seeded = false;
     police.reset();
@@ -200,6 +210,7 @@ async function main(saved = {}) {
     try { localStorage.setItem('brookfield-drive-mode', m); } catch { /* storage unavailable */ }
     const on = m === 'photo';
     world.group.visible = !on;
+    if (!on) world.updateLod(player.x, player.z); // you may have driven far in photo mode
     photo?.setVisible(on);
     sun.castShadow = !on;
     player.blob.visible = on;
@@ -255,6 +266,7 @@ async function main(saved = {}) {
     }
     const mode = CAM_MODES[camMode];
     player.group.visible = mode !== 'hood'; // otherwise the cabin/glass boxes block the view
+    crash.damage.setInsideView(mode === 'hood'); // a cracked windshield is drawn over the screen instead
     const k = mode === 'hood' || mode === 'orbit' ? 1 : 1 - Math.exp(-dt * (mode === 'top' ? 4 : 6));
     camPos.lerp(tmp, k);
     camera.position.copy(camPos);
@@ -302,7 +314,8 @@ async function main(saved = {}) {
   input.on('NumpadEnter', () => missions.confirm());
   input.on('KeyG', () => missions.toggleGhost());
   input.on('Backspace', () => { if (missions.running) missions.retry(); });
-  input.on('KeyR', () => { placeOnRoad(player.x, player.z, player.heading); crash.repair(); afterMove(); });
+  input.on('KeyR', () => { placeOnRoad(player.x, player.z, player.heading); afterMove(); }); // back on the road; repairs need a shop
+  input.on('KeyF', () => shops.tow());
   input.on('KeyP', () => applyMode(mode === 'photo' ? 'classic' : 'photo'));
   input.on('KeyT', () => { traffic.enabled = !traffic.enabled; if (!traffic.enabled) { traffic.clear(); police.reset(); } traffic._seeded = false; });
   input.on('KeyH', () => helpEl.classList.toggle('hidden'));
@@ -401,6 +414,7 @@ async function main(saved = {}) {
       police.update(realDt, player);
       crash.update(realDt, camera, renderer);
       missions.update(realDt, camera, renderer);
+      shops.update(realDt);
     }
     if (mode === 'classic') {
       if (aerial) aerial.update(player.x, player.z);
@@ -440,7 +454,7 @@ async function main(saved = {}) {
   updateHint();
 
   // handle for debugging / automated checks
-  window.__game = { THREE, map, get aerial() { return aerial; }, roads, buildings, world, traffic, police, crash, missions, env, player, renderer, scene, camera, hud, input, stats, placeOnRoad, afterMove, applyMode, get mode() { return mode; }, get photo() { return photo; }, setCam: (i) => { camMode = i; } };
+  window.__game = { THREE, map, get aerial() { return aerial; }, roads, buildings, world, traffic, police, crash, missions, shops, env, player, renderer, scene, camera, hud, input, stats, placeOnRoad, afterMove, applyMode, get mode() { return mode; }, get photo() { return photo; }, setCam: (i) => { camMode = i; } };
 }
 
 function boot(saved) {
