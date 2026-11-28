@@ -1,4 +1,4 @@
-// Mission mode: 12 timed A-to-B runs between Brookfield landmarks, in three tiers. Press N for the list.
+// Mission mode: 13 timed A-to-B runs between Brookfield and Waukesha landmarks, in three tiers. Press N for the list.
 //  - Every mission has a fixed start (you're taken there, car repaired) and fixed gold/silver/bronze
 //    times, so every run of a mission is comparable. No other rules: only your time counts.
 //  - The route (fastest at the posted limits, one-ways respected, service roads only for the last bit)
@@ -37,6 +37,7 @@ export const MISSIONS = [
   { id: 'bullseye', tier: 'hard', name: 'Bullseye to Bullseye', from: 'Target (west)', to: 'Target (east)', start: [-4204.7, 2998.4, -0.006], finish: [4480.7, 3094.2], r: 20, medals: [241, 321, 412] },
   { id: 'long-way-home', tier: 'hard', name: 'The Long Way Home', from: 'Brookfield Sports Complex', to: KR, start: [-2271, -4755, -1.569], finish: [2090, -745], r: 15, medals: [286, 382, 489] },
   { id: 'cross-town', tier: 'hard', name: 'Cross-Town', from: 'Brookfield Academy', to: 'Elm Grove Village Hall', start: [-1575.6, -2322.4, -0.325], finish: [3482.5, 1587], r: 20, medals: [322, 429, 550] },
+  { id: 'first-bell', tier: 'hard', name: 'First Bell', from: KR, to: 'Catholic Memorial High School', start: [2091.1, -743.3, -1.075], finish: [-7630, 6595.4], r: 20, medals: [475, 633, 811] }, // in Waukesha; provisional medals (calibration run pending)
 ];
 const MEDAL_NAMES = ['gold', 'silver', 'bronze'];
 const SPLITS = [0.75, 0.5, 0.25]; // fraction of the starting route length still to go

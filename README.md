@@ -155,7 +155,7 @@ npm run audit-ground           # checks that the ground never pokes through a ro
 
 ## Missions
 
-Press **N** for the mission list: 12 timed runs between Brookfield landmarks, in three tiers. Pick one with the arrow keys and Enter, or click it.
+Press **N** for the mission list: 13 timed runs between Brookfield and Waukesha landmarks, in three tiers. Pick one with the arrow keys and Enter, or click it.
 
 | Tier | Mission | From → to |
 | --- | --- | --- |
@@ -171,8 +171,9 @@ Press **N** for the mission list: 12 timed runs between Brookfield landmarks, in
 | Hard | The Long Way Home | Brookfield Sports Complex → 15185 Kings Ridge Ct. |
 | Hard | Bullseye to Bullseye | Target (west, Bluemound) → Target (east, Bluemound) |
 | Hard | Cross-Town | Brookfield Academy → Elm Grove Village Hall |
+| Hard | First Bell | 15185 Kings Ridge Ct. → Catholic Memorial High School (Waukesha, about 17 km) |
 
-15185 Kings Ridge Ct. isn't in OpenStreetMap, so that finish is the curb on the cul-de-sac bulb next to its mapped neighbors (15165 and 15160). Brookfield Square's finish is the mall's west entrance.
+15185 Kings Ridge Ct. isn't in OpenStreetMap, so that finish is the curb on the cul-de-sac bulb next to its mapped neighbors (15165 and 15160). Brookfield Square's finish is the mall's west entrance. Catholic Memorial's is the drive along the north side of the school building.
 
 How a run works:
 
