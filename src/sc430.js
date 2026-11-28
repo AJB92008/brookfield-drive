@@ -37,6 +37,18 @@ function rollGeometry(roll) {
   return [-min, k];
 }
 const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+// Steering assist (hands off the steering on a road): see update(). Two strengths, blended by the gas
+// pedal: on the gas it clicks the car onto the road; coasting or braking it only nudges.
+const DEG = Math.PI / 180;
+const ASSIST = {
+  // delay/ramp: s after the last steering input before it starts, then fades in
+  // full/off: full strength within `full` of the road's direction, none past `off`
+  // gain/maxRate: yaw toward the road = gain x the error (1/s), capped (rad/s; also kept inside the tires' grip)
+  gas: { delay: 0.2, ramp: 0.15, full: 12 * DEG, off: 22 * DEG, gain: 4, maxRate: 0.6 },
+  coast: { delay: 0.25, ramp: 0.35, full: 5 * DEG, off: 9 * DEG, gain: 0.8, maxRate: 0.05 },
+  minSpeed: 3, // m/s
+};
+const assistParam = (k, g) => ASSIST.coast[k] + (ASSIST.gas[k] - ASSIST.coast[k]) * g;
 const TIRE_R = (18 * 25.4 + 2 * 245 * 0.4) / 2000; // 245/40R18 -> 0.3266 m
 const FRONTAL_AREA = SC430.widthM * SC430.heightM * 0.85; // ~2.09 m^2
 const RHO = 1.225, CRR = 0.012, DRIVELINE = 0.86;
@@ -598,6 +610,36 @@ export class PlayerCar {
     if (rolled) yaw = 0;
     else if (sliding) yaw *= 0.35;
     this.heading -= yaw * dt; // the velocity turns with steering (tires gripping)...
+    // Steering assist: with no steering input at all, turn the heading onto the direction of the road
+    // you're on, so the car tracks straight and follows the road's bends. On the gas it clicks on firmly
+    // (within ~22 deg of the road, about a quarter second to line up); coasting or braking it only nudges
+    // (within 9 deg, slowly). Any steering input switches it off for that moment and the physics are
+    // exactly as without it. Past the window (turning into a junction, a driveway, a U-turn) it does
+    // nothing, and it doesn't pull you toward the middle of the lane.
+    this.handsOffT = input.steer !== 0 ? 0 : (this.handsOffT || 0) + dt;
+    const handsOff = this.laneAssist !== false && input.steer === 0 && !rolled && !sliding && !input.handbrake && this.gear > 0;
+    let assistTarget = 0;
+    const gas = Math.min(1, throttle / 0.5); // full "click" from half throttle up (analog triggers)
+    const delay = assistParam('delay', gas);
+    if (handsOff && this.handsOffT > delay && !this.offRoad && vf > ASSIST.minSpeed && Math.abs(this.spin) < 0.1) {
+      const hx = Math.sin(this.heading), hz = Math.cos(this.heading);
+      const road = env.roads.alignedDir(this.x, this.z, hx, hz);
+      if (road) {
+        const err = wrapPi(Math.atan2(road.dirX, road.dirZ) - this.heading); // + = the road heads to a larger heading
+        const a = Math.abs(err), off = assistParam('off', gas), full = assistParam('full', gas);
+        if (a < off) {
+          const w = Math.min(1, (off - a) / (off - full)) * Math.min(1, (this.handsOffT - delay) / assistParam('ramp', gas));
+          const cap = Math.min(assistParam('maxRate', gas), maxYaw * 0.7);
+          assistTarget = Math.max(-cap, Math.min(cap, err * assistParam('gain', gas))) * w;
+        }
+      }
+    }
+    // eased (~0.08 s) so the bends between the map's straight road pieces, or grazing the road edge, don't
+    // twitch the car; any steering input (or the assist turned off, a skid, the handbrake) zeroes it at once
+    this.assistYaw = handsOff ? (this.assistYaw || 0) + (assistTarget - (this.assistYaw || 0)) * Math.min(1, dt / 0.08) : 0;
+    this.heading += this.assistYaw * dt;
+    // the front wheels show the assist turning them (the steer that would give the same yaw)
+    this.assistSteer = this.assistYaw ? Math.max(-1, Math.min(1, (-Math.atan((this.assistYaw * SC430.wheelbaseM) / Math.max(vf, 1)) / (T.maxSteer * D.steerLock)) * (1 + Math.max(0, absV - 5) / T.steerFalloff))) : 0;
     if (rolled) {
       // sliding on its side / roof: body friction, no tires
       const sp = Math.hypot(vf, vl), dec = Math.min(sp, 0.55 * G * dt);
@@ -619,7 +661,7 @@ export class PlayerCar {
     this.vz = nfz * vf + nrz * vl;
     // ...but a spin from an impact turns the body without turning the velocity (it skids)
     this.heading += this.spin * dt;
-    this.headingRate = this.spin - yaw;
+    this.headingRate = this.spin - yaw + this.assistYaw;
     const spinFriction = rolled ? 1.6 : sliding ? 2.4 : 5.5; // tires resist the rotation
     this.spin -= Math.sign(this.spin) * Math.min(Math.abs(this.spin), spinFriction * dt);
     this.x += this.vx * dt;
@@ -808,7 +850,7 @@ export class PlayerCar {
     this.group.rotation.set(this.bodyPitch + (this.slopePitch || 0) + (this.jPitch || 0) + (this.dmgPitch || 0), this.heading, this.bodyRoll + (this.jRoll || 0) + (this.roll || 0) + (this.dmgRoll || 0), 'YXZ');
     for (const w of this.wheels) {
       w.spin.rotation.x = this.wheelSpin;
-      w.pivot.rotation.y = w.front ? -this.steer * 0.45 : 0;
+      w.pivot.rotation.y = w.front ? -(this.steer + (this.assistSteer || 0)) * 0.45 : 0;
     }
     this.brakeMat.color.setHex(this.braking ? 0xff1a1a : 0x3a0306);
   }

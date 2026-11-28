@@ -1,4 +1,4 @@
-// Posted speed limit (mph) for every road, used by the AI drivers, the police and the HUD sign.
+// Posted speed limit (mph) for every road, used by the AI drivers and the HUD sign.
 // 1. OSM maxspeed where it's tagged (all of Bluemound/Moorland/I-94 etc.)
 // 2. otherwise the nearest tagged stretch of the same street (e.g. untagged blocks of Calhoun Rd)
 // 3. otherwise Wisconsin defaults: 25 mph in residence districts (Wis. Stat. 346.57), class-based elsewhere

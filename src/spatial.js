@@ -123,6 +123,33 @@ export class RoadIndex {
     return best; // road index or null
   }
 
+  // Direction of the road under (x,z) that best lines up with the unit vector (fx,fz), signed to point
+  // the same way: { dirX, dirZ, dot } (dot = cos of the angle between them), or null if no road is under
+  // the point. Parking aisles and driveways are skipped. At a junction the cross street is ignored
+  // naturally (its dot is near 0).
+  alignedDir(x, z, fx, fz) {
+    let best = null, bestDot = -1;
+    const q = ++this._q;
+    this.grid.forBox(x, z, x, z, (s) => {
+      if (this._stamp[s] === q) return;
+      this._stamp[s] = q;
+      const r = this.roads[this.road[s]];
+      if (isMinorRoad(r)) return;
+      const ax = this.ax[s], az = this.az[s], dx = this.bx[s] - ax, dz = this.bz[s] - az;
+      const t = segT(x, z, ax, az, ax + dx, az + dz);
+      if (Math.hypot(x - (ax + dx * t), z - (az + dz * t)) > r.w / 2 + 0.4) return;
+      const L = Math.hypot(dx, dz);
+      if (L < 1e-6) return;
+      const dot = (dx * fx + dz * fz) / L;
+      if (Math.abs(dot) > bestDot) {
+        bestDot = Math.abs(dot);
+        const sg = dot < 0 ? -1 : 1;
+        best = { dirX: (sg * dx) / L, dirZ: (sg * dz) / L, dot: bestDot };
+      }
+    });
+    return best;
+  }
+
   // Height of the drivable surface under (x,z) for something currently at height y: the real terrain,
   // or a bridge deck if one is there and not too far above y (so you can drive under overpasses).
   surfaceHeight(x, z, y = Infinity) {

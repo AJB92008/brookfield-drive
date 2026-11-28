@@ -2,8 +2,7 @@ import * as THREE from 'three';
 import { RoadIndex, BuildingIndex } from './spatial.js';
 import { buildWorld } from './world.js';
 import { PlayerCar, tuneSummary } from './sc430.js';
-import { Traffic } from './traffic.js';
-import { Police } from './police.js';
+import { Traffic, hashSeed } from './traffic.js';
 import { CrashSystem } from './crash.js';
 import { Missions } from './missions.js';
 import { RepairShops } from './shops.js';
@@ -122,7 +121,6 @@ async function main(saved = {}) {
   if (Number.isFinite(saved.x) && Number.isFinite(saved.z)) player.place(saved.x, saved.z, saved.heading || 0);
 
   const hud = new Hud(map, roads);
-  const police = new Police({ traffic, hud, roads, map });
   // crashes: sparks / debris / smoke, damage, breakaway poles
   const crash = new CrashSystem({ scene, player, furniture: world.furniture, ground: null, hud });
   crash.traffic = traffic;
@@ -179,11 +177,15 @@ async function main(saved = {}) {
     return map.terrain ? player.y + T(x, z) - T(player.x, player.z) : player.y;
   };
   const missions = new Missions({
-    map, roads, buildings, scene, player, hud, police, ground: missionGround,
+    map, roads, buildings, scene, player, hud, ground: missionGround,
     // mission start: exactly at the start point (lots and school drives included), repaired, fresh traffic
     teleport: (x, z, h) => { hud.toggleBig(false); player.place(x, z, h); crash.repair(); afterMove(); },
     mode: () => mode,
     damage: () => crash.damage?.total ?? 0,
+    // every run of a mission gets the same traffic (seeded by the mission, living along its route)
+    onRunStart: (m, pts, start) => { if (traffic.enabled) traffic.beginMission(hashSeed(m.id), pts, start); },
+    onRunEnd: () => traffic.endMission(),
+    clock: () => (traffic.mission ? traffic.time : null),
   });
   // repairs happen at real repair shops; a car that can't drive gets towed to the nearest one
   const shops = new RepairShops({
@@ -195,9 +197,10 @@ async function main(saved = {}) {
   let groundPendingSince = 0;
   function afterMove() {
     world.updateLod(player.x, player.z); // show the cells around where we landed right away
-    traffic.clear();
-    traffic._seeded = false;
-    police.reset();
+    if (!traffic.mission) { // mission traffic doesn't depend on where you are (R mid-mission keeps it)
+      traffic.clear();
+      traffic._seeded = false;
+    }
     if (mode === 'photo') { player.groundPending = true; groundPendingSince = performance.now(); } else useClassicGround();
     snapCamera();
   }
@@ -317,7 +320,7 @@ async function main(saved = {}) {
   input.on('KeyR', () => { placeOnRoad(player.x, player.z, player.heading); afterMove(); }); // back on the road; repairs need a shop
   input.on('KeyF', () => shops.tow());
   input.on('KeyP', () => applyMode(mode === 'photo' ? 'classic' : 'photo'));
-  input.on('KeyT', () => { traffic.enabled = !traffic.enabled; if (!traffic.enabled) { traffic.clear(); police.reset(); } traffic._seeded = false; });
+  input.on('KeyT', () => { traffic.enabled = !traffic.enabled; traffic.endMission(); if (!traffic.enabled) traffic.clear(); traffic._seeded = false; });
   input.on('KeyH', () => helpEl.classList.toggle('hidden'));
   input.on('KeyI', () => { const el = document.getElementById('spec'); el.hidden = !el.hidden; });
   // Stock (the real car) vs Sport tune; remembered between visits
@@ -333,6 +336,13 @@ async function main(saved = {}) {
   try { savedTune = localStorage.getItem('brookfield-drive-tune'); } catch { /* storage unavailable */ }
   applyTune(savedTune || 'sport');
   input.on('KeyK', () => { applyTune(player.tuneName === 'sport' ? 'stock' : 'sport'); hud.toast(`${player.tune.label}: ${tuneSummary(player.tune).hp} hp`, 2500); });
+  // steering assist (sc430.js): on unless turned off, remembered between visits
+  try { player.laneAssist = localStorage.getItem('brookfield-drive-assist') !== 'off'; } catch { player.laneAssist = true; }
+  input.on('KeyL', () => {
+    player.laneAssist = !player.laneAssist;
+    try { localStorage.setItem('brookfield-drive-assist', player.laneAssist ? 'on' : 'off'); } catch { /* storage unavailable */ }
+    hud.toast(`Steering assist ${player.laneAssist ? 'on: let go of steering on the gas and the car clicks onto the road' : 'off'}`, 2500);
+  });
   setTimeout(() => helpEl.classList.add('hidden'), 20000);
 
   addEventListener('resize', () => {
@@ -410,8 +420,7 @@ async function main(saved = {}) {
       }
       player.updateVertical(realDt, env);
       if (impact > 4) shake = Math.min(1.2, impact * 0.08);
-      traffic.update(realDt, player, now / 1000);
-      police.update(realDt, player);
+      traffic.update(realDt, player); // fixed steps on its own clock
       crash.update(realDt, camera, renderer);
       missions.update(realDt, camera, renderer);
       shops.update(realDt);
@@ -420,7 +429,7 @@ async function main(saved = {}) {
       if (aerial) aerial.update(player.x, player.z);
       lodTimer -= dt;
       if (lodTimer <= 0) { lodTimer = 0.5; world.updateLod(player.x, player.z); }
-      world.furniture?.updateSignals(now / 1000);
+      world.furniture?.updateSignals(traffic.time); // the lights you see are the ones traffic obeys
     }
     updateCamera(dt);
     updateSun();
@@ -454,7 +463,7 @@ async function main(saved = {}) {
   updateHint();
 
   // handle for debugging / automated checks
-  window.__game = { THREE, map, get aerial() { return aerial; }, roads, buildings, world, traffic, police, crash, missions, shops, env, player, renderer, scene, camera, hud, input, stats, placeOnRoad, afterMove, applyMode, get mode() { return mode; }, get photo() { return photo; }, setCam: (i) => { camMode = i; } };
+  window.__game = { THREE, map, get aerial() { return aerial; }, roads, buildings, world, traffic, crash, missions, shops, env, player, renderer, scene, camera, hud, input, stats, placeOnRoad, afterMove, applyMode, get mode() { return mode; }, get photo() { return photo; }, setCam: (i) => { camMode = i; } };
 }
 
 function boot(saved) {

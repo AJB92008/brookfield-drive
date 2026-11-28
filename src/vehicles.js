@@ -1,11 +1,11 @@
 // AI vehicle types: low-poly models (local +z = forward, +x = the vehicle's LEFT side, y = 0 on the
-// ground), real-world sizes / masses / performance, and a lamp shader so brake lights, turn signals and
-// police light bars can light up per instance.
+// ground), real-world sizes / masses / performance, and a lamp shader so brake lights and turn signals
+// can light up per instance.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // lamp ids baked into the geometry (vertex attribute `lamp`)
-export const LAMP = { NONE: 0, TAIL: 1, LEFT: 2, RIGHT: 3, HEAD: 4, RED: 5, BLUE: 6 };
+export const LAMP = { NONE: 0, TAIL: 1, LEFT: 2, RIGHT: 3, HEAD: 4 };
 
 const COLORS = [0xf2f2f2, 0x1c1c1e, 0x8d9399, 0xb5b9bd, 0x24427a, 0x7a1f1f, 0x2e4d35, 0xc9b38a, 0x3c5f8f, 0x9e2b25, 0x5b5f63, 0xe6e0d0, 0x253b52, 0xd4a017];
 const TRUCK_COLORS = [0xf2f2f2, 0xe8e8e8, 0xc9ccd0, 0x9e2b25, 0x24427a, 0x2e4d35, 0x1c1c1e];
@@ -154,20 +154,6 @@ function trailer() {
   return { body, details };
 }
 
-function police() {
-  const v = car({ L: 5.05, W: 2.0, bodyH: 0.8, cabinH: 0.68, cabinL: 2.9, cabinZ: -0.35, wheelR: 0.4, tall: true });
-  const top = 0.3 + 0.8 + 0.68;
-  const extra = mergeGeometries([
-    box(2.0 * 0.885 + 0.01, 0.02, 1.2, 0, top + 0.01, -0.2, 0x111111), // bar base
-    box(0.55, 0.14, 0.32, 0.32, top + 0.1, -0.2, 0x5a0a0a, LAMP.RED), // left = red
-    box(0.55, 0.14, 0.32, -0.32, top + 0.1, -0.2, 0x0a1a5a, LAMP.BLUE), // right = blue
-    box(2.02, 0.42, 1.9, 0, 0.75, 0.05, 0x111214), // black doors
-    box(2.0, 0.05, 1.35, 0, 1.12, 1.82, 0x111214), // black hood
-    box(1.3, 0.35, 0.18, 0, 0.6, 2.62, 0x111214), // push bar
-  ]);
-  return { body: v.body, details: mergeGeometries([v.details, extra]) };
-}
-
 // spawn share, size, mass, acceleration and top-speed multipliers, which roads they use
 export const VEHICLE_TYPES = [
   { id: 'sedan', share: 36, len: 4.8, width: 1.85, mass: 1500, accel: 1, build: () => car({ L: 4.8, W: 1.85, bodyH: 0.62, cabinH: 0.6, cabinL: 2.4, cabinZ: -0.25 }), colors: COLORS },
@@ -177,7 +163,6 @@ export const VEHICLE_TYPES = [
   { id: 'boxtruck', share: 4, len: 7.6, width: 2.4, mass: 7000, accel: 0.55, maxMph: 65, big: true, roads: 2, build: boxTruck, colors: TRUCK_COLORS },
   { id: 'bus', share: 2, len: 12.2, width: 2.55, mass: 13000, accel: 0.5, maxMph: 55, big: true, roads: 3, noFreeway: true, build: bus, colors: [0xf4f4f0] },
   { id: 'semi', share: 4, len: 6.4, width: 2.5, mass: 16000, accel: 0.4, maxMph: 65, big: true, roads: 4, trailerLen: 16.2, build: semiTractor, colors: [0xf2f2f2, 0x9e2b25, 0x24427a, 0x1c1c1e, 0x2e4d35, 0xd4a017] },
-  { id: 'police', share: 0, len: 5.05, width: 2.0, mass: 2150, accel: 1.15, build: police, colors: [0xf4f4f4] },
 ];
 export const TYPE = Object.fromEntries(VEHICLE_TYPES.map((t) => [t.id, t]));
 export const TRAILER = { id: 'trailer', build: trailer };
@@ -204,7 +189,7 @@ function addDent(sh) {
 }
 
 // Lambert material whose emissive picks up per-instance lamp states (instanced attribute `lampState`:
-// x = brake 0..1, y = left signal on, z = right signal on, w = police bar 0 off / 1 red / 2 blue).
+// x = brake 0..1, y = left signal on, z = right signal on, w unused).
 export function makeLampMaterial() {
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
   mat.onBeforeCompile = (sh) => {
@@ -221,13 +206,11 @@ vec3 lampGlow(float id, vec4 st) {
   if (id < 1.5) return vec3(1.0, 0.06, 0.04) * (0.25 + 2.2 * st.x);
   if (id < 2.5) return vec3(1.0, 0.5, 0.03) * 2.6 * st.y;
   if (id < 3.5) return vec3(1.0, 0.5, 0.03) * 2.6 * st.z;
-  if (id < 4.5) return vec3(1.0, 0.95, 0.8) * 0.5;
-  if (id < 5.5) return vec3(1.0, 0.08, 0.06) * (st.w > 0.5 && st.w < 1.5 ? 4.0 : 0.12);
-  return vec3(0.12, 0.3, 1.0) * (st.w > 1.5 ? 4.5 : 0.12);
+  return vec3(1.0, 0.95, 0.8) * 0.5;
 }`)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += lampGlow(vLampId, vLampState);');
   };
-  mat.customProgramCacheKey = () => 'vehicle-lamps-dent-v2';
+  mat.customProgramCacheKey = () => 'vehicle-lamps-dent-v3';
   return mat;
 }
 

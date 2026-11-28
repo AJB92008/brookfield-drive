@@ -272,13 +272,16 @@ function makeGhostModel() {
 export class Missions {
   // teleport(x, z, heading): put the car there, repaired, and reset traffic around it
   // ground(x, z): ground height for the current mode; mode(): 'classic' | 'photo'; damage(): 0..100
-  constructor({ map, roads, buildings, scene, player, hud, police, ground, teleport, mode, damage }) {
+  // onRunStart(mission, routePts, [x, z]) / onRunEnd(): a run starts / ends (mission traffic)
+  constructor({ map, roads, buildings, scene, player, hud, ground, teleport, mode, damage, onRunStart, onRunEnd, clock }) {
     this.map = map;
     this.player = player;
     this.hud = hud;
-    this.police = police;
     this.ground = ground;
     this.teleport = teleport;
+    this.onRunStart = onRunStart; // (mission, route points, start) -> the same traffic every run (main.js)
+    this.onRunEnd = onRunEnd;
+    this.clock = clock; // () -> mission traffic clock (s since the run began), or null
     this.mode = mode || (() => 'classic');
     this.damage = damage || (() => 0);
     this.scene = scene;
@@ -406,8 +409,7 @@ export class Missions {
       rec: [], recT: 0, top: 0, dist: 0, best, ghostData, ghostMode: best?.ghostMode, ghostY: null, ghostYT: 0,
     };
     this.hold = true;
-    this.police?.reset();
-    if (this.police) this.police.suspended = true; // no rules in missions: the police leave you alone
+    this.onRunStart?.(m, route.pts, [sx, sz]);
     this.hud.route = { pts: route.pts, color, dest: [fx, fz] };
     // start card
     this.introEl.innerHTML = `<div class="mx-tier" style="--tc:${hex(color)}">${tierOf(m).label}</div><div class="mx-name">${esc(m.name)}</div>` +
@@ -420,12 +422,12 @@ export class Missions {
 
   abort(msg) {
     if (!this.active) return;
+    this.onRunEnd?.();
     this.scene.remove(this.active.beacon);
     this.active.beacon.traverse((o) => { o.geometry?.dispose(); o.material?.alphaMap?.dispose(); o.material?.dispose(); });
     this.active = null;
     this.hold = false;
     if (this.ghost) this.ghost.visible = false;
-    if (this.police) { this.police.suspended = false; this.police.cool = Math.max(this.police.cool, 5); } // no instant chase for crossing the line at 150 mph
     this.hud.route = null;
     for (const el of [this.countEl, this.hudEl, this.marker, this.introEl, this.splitEl]) el.hidden = true;
     if (msg) this.hud.toast(msg, 3500);
@@ -504,7 +506,9 @@ export class Missions {
       this.countEl.hidden = false;
       this.countEl.textContent = '';
     } else if (a.phase === 'countdown') {
-      a.count -= dt;
+      // on the traffic clock when there's mission traffic, so GO comes at the same moment for the traffic
+      const c = this.clock?.();
+      if (c !== null && c !== undefined) a.count = Math.min(a.count, 3 - c); else a.count -= dt;
       P.vx = P.vz = 0; P.spin = 0; P.gear = 1;
       this.countEl.hidden = false;
       this.countEl.textContent = a.count > 0 ? String(Math.ceil(a.count)) : 'GO!';

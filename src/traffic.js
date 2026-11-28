@@ -7,11 +7,9 @@
 //    oncoming traffic, ramps merge onto I-94 by gap acceptance, and nobody blocks the box.
 //  - Lanes: lane 0 = curb lane. MOBIL lane changes (pass slower cars, keep right) and mandatory moves
 //    into the correct lane for a turn or a lane drop, with turn signals. Smooth curves through junctions.
-//  - Vehicles: sedans, SUVs, pickups, vans, box trucks, buses, semis with trailers, police.
+//  - Vehicles: sedans, SUVs, pickups, vans, box trucks, buses, semis with trailers.
 //  - You: they predict your path and brake or swerve, yield to you at junctions, and get knocked around
 //    by impulse physics when you hit them, then recover and drive off.
-//  - Police: patrol like everyone else; pursuit routing / chasing / everyone pulling over (police.js
-//    decides when).
 import * as THREE from 'three';
 import { Grid } from './spatial.js';
 import { phaseState, signalOffset } from './furniture.js';
@@ -37,12 +35,36 @@ export const PERSONALITIES = [
   { id: 'normal', share: 60, v0: [0.97, 1.04], T: 1.4, a: 2.1, b: 2.8, s0: 2.0, p: 0.3, lcTh: 0.25, gap: 4.5, latA: 2.8, react: 0.7, roll: false },
   { id: 'aggressive', share: 15, v0: [1.08, 1.18], T: 0.9, a: 3.0, b: 3.6, s0: 1.4, p: 0.05, lcTh: 0.08, gap: 3.0, latA: 3.6, react: 0.3, roll: true },
 ];
-const PURSUIT = { id: 'pursuit', v0: [1, 1], T: 0.6, a: 4.5, b: 6, s0: 1.2, p: 0, lcTh: 0, gap: 1.5, latA: 5.5, react: 0, roll: true };
 
-const roulette = (list, w) => {
+// Small seeded PRNG (mulberry32). In a mission every car and every spawn slot draws from its own stream, so
+// the same mission always plays out with the same traffic.
+export function seededRandom(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+export const hashSeed = (str) => { let h = 2166136261; for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619); return h >>> 0; };
+const subSeed = (seed, i) => hashSeed(`${seed}:${i}`);
+// Fixed simulation step: traffic runs the same whatever the frame rate (drawn interpolated between steps).
+const STEP = 1 / 60;
+// Mission traffic: instead of a ring of cars around you, a fixed population lives in a corridor along the
+// mission's route (independent of where you are), so every run of a mission meets the same traffic.
+const MISSION = {
+  R: 250, // corridor half-width (m) around the route
+  rim: 0.62, // replacement cars appear between rim x R and R from the route (they drive in from the sides)
+  density: 100, // cars per km^2 of corridor (about free-roam density)...
+  cap: 300, // ...up to this many (long routes are a little sparser; it's frame rate)
+  startClear: 40, // no car within this of the start point
+};
+const roulette = (list, w, rand = Math.random) => {
   let total = 0;
   for (const x of list) total += w(x);
-  let r = Math.random() * total;
+  let r = rand() * total;
   for (const x of list) if ((r -= w(x)) <= 0) return x;
   return list[list.length - 1];
 };
@@ -70,12 +92,13 @@ export class Traffic {
     this.buildings = buildings;
     this.limits = computeSpeedLimits(map);
     this.buildGraph();
-    this.meshes = makeFleetMeshes(scene, maxCars);
+    this.capacity = Math.max(maxCars, MISSION.cap + 20); // instance buffers: room for a mission corridor
+    this.meshes = makeFleetMeshes(scene, this.capacity);
     // contact shadows (photoreal mode)
     this.blobMesh = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2).translate(0, 0.06, 0),
       new THREE.MeshBasicMaterial({ map: blobTexture(), transparent: true, depthWrite: false, toneMapped: false }),
-      maxCars * 2,
+      this.capacity * 2,
     );
     this.blobMesh.frustumCulled = false;
     this.blobMesh.renderOrder = 1;
@@ -90,13 +113,12 @@ export class Traffic {
     this.occ = new Map(); // junction vertex -> Set of cars cleared to cross it
     this.cc = new Map(); // conflict cache per vertex
     this.pathCache = new Map(); // sampled movement paths
-    this.events = []; // collisions with the player, read by police.js
     this.offRoad = []; // crashed / chasing cars (obstacles for everyone else)
     this.dbg = { forced: 0, committed: 0, samples: [] };
-    this.time = 0;
+    this.time = 0; // simulation clock (s): traffic signals run on it
+    this.acc = 0; // unsimulated time carried to the next frame
+    this.mission = null; // mission corridor (beginMission)
     this.nextId = 1;
-    this.navDist = null;
-    this.navTimer = 0;
     this.player = { x: 0, z: 0, vx: 0, vz: 0, heading: 0 };
     this._m = new THREE.Matrix4();
     this._q = new THREE.Quaternion();
@@ -390,14 +412,6 @@ export class Traffic {
 
   chooseNext(e, car = null) {
     const outs = this.out[e.to] || [];
-    if (car?.pursuit && this.navDist) {
-      let best = null, bd = Infinity;
-      for (const o of outs) {
-        const d = o.len + this.navDist[o.to] + (o === e.twin ? 40 : 0);
-        if (d < bd) { bd = d; best = o; }
-      }
-      if (best) return best;
-    }
     let opts = outs.filter((o) => o !== e.twin);
     if (!opts.length) return e.twin; // dead end: U-turn (null if one-way dead end)
     if (e.inner && opts.length > 1) {
@@ -421,11 +435,11 @@ export class Traffic {
         if (k) w *= e.len > 90 * k + 60 ? 0.5 : 0.04;
       }
       return w;
-    });
+    }, car ? car.rand : Math.random);
   }
 
   // ------------------------------------------------------------------ spawning
-  spawnNear(px, pz, minR, maxR, { police = false } = {}) {
+  spawnNear(px, pz, minR, maxR) {
     for (let attempt = 0; attempt < 30; attempt++) {
       const ang = Math.random() * TAU;
       const d = minR + Math.random() * (maxR - minR);
@@ -439,36 +453,40 @@ export class Traffic {
       const p = this.pointOn(e, s, 0);
       const dd = Math.hypot(p.x - px, p.z - pz);
       if (dd < minR || dd > maxR + 60) continue;
-      let type = police ? TYPE.police : roulette(VEHICLE_TYPES.filter((t) => t.share > 0), (t) => t.share);
-      if (!police && this.policeCount() < 3 && Math.random() < 0.04) type = TYPE.police;
-      if ((MIN_RANK[type.id] || 0) > e.rank || (type.noFreeway && e.freeway)) type = TYPE.sedan;
-      const lane = Math.floor(Math.random() * e.lanes);
-      const back = type.len / 2 + (type.trailerLen ? type.trailerLen - 1.6 : 0), front = type.len / 2;
-      if (e.cars.some((c) => this.inLane(c, lane) && (c.s > s ? c.s - c.back - s - front < (c.speed < 1 ? 40 : 10) : s - back - c.s - c.front < 10))) continue;
-      return this.addCar(e, s, lane, type);
+      const car = this.placeCar(e, s, Math.random);
+      if (car) return car;
     }
     return null;
   }
-  policeCount() { let n = 0; for (const c of this.cars) if (c.police) n++; return n; }
+  // A new car at distance s along e: vehicle type, lane, and room for it there (null if there isn't).
+  // `rand` picks the type and lane; the car then gets its own stream (in a mission, seeded from `rand`).
+  placeCar(e, s, rand) {
+    let type = roulette(VEHICLE_TYPES.filter((t) => t.share > 0), (t) => t.share, rand);
+    if ((MIN_RANK[type.id] || 0) > e.rank || (type.noFreeway && e.freeway)) type = TYPE.sedan;
+    const lane = Math.floor(rand() * e.lanes);
+    const carRand = this.mission ? seededRandom((rand() * 4294967296) >>> 0) : Math.random;
+    const back = type.len / 2 + (type.trailerLen ? type.trailerLen - 1.6 : 0), front = type.len / 2;
+    if (e.cars.some((c) => this.inLane(c, lane) && (c.s > s ? c.s - c.back - s - front < (c.speed < 1 ? 40 : 10) : s - back - c.s - c.front < 10))) return null;
+    return this.addCar(e, s, lane, type, null, carRand);
+  }
 
-  addCar(e, s, lane, type = TYPE.sedan, pers = null) {
-    if (this.cars.length >= this.maxCars) return null;
-    pers ||= type.id === 'police' ? PERSONALITIES[1] : roulette(PERSONALITIES, (p) => p.share);
+  addCar(e, s, lane, type = TYPE.sedan, pers = null, rand = Math.random) {
+    if (this.cars.length >= (this.mission ? this.capacity : this.maxCars)) return null;
+    pers ||= roulette(PERSONALITIES, (p) => p.share, rand);
     const trailerLen = type.trailerLen || 0;
     const car = {
-      id: this.nextId++, type, pers, police: type.id === 'police',
+      id: this.nextId++, type, pers, rand, // rand: this car's own random stream
       len: type.len, width: type.width, mass: type.mass + (trailerLen ? 8000 : 0),
       front: type.len / 2, back: type.len / 2 + (trailerLen ? trailerLen - 1.6 : 0),
       aMax: pers.a * type.accel, maxV: type.maxMph ? type.maxMph * MPH : 1e9,
-      v0f: pers.v0[0] + Math.random() * (pers.v0[1] - pers.v0[0]),
+      v0f: pers.v0[0] + rand() * (pers.v0[1] - pers.v0[0]),
       mode: 'drive', edge: e, s, lane, off: this.laneOffset(e, lane), lc: null, next: null, curve: null,
       speed: 0, acc: 0, res: [], waitT: 0,
       stopDone: false, stopT: 0, arrT: 0, held: false, yielding: false, wasHeld: false, startDelay: 0, rtorStop: false, rerouted: false,
-      blink: 0, brake: 0, hazard: false, swerve: 0, swerveT: 0, swerveDir: 0, pullT: 0, pullOff: 0, stunT: 0,
-      lcTimer: Math.random(), seg: 0, color: type.colors[Math.floor(Math.random() * type.colors.length)],
+      blink: 0, brake: 0, hazard: false, swerve: 0, swerveT: 0, swerveDir: 0, stunT: 0,
+      lcTimer: rand(), seg: 0, color: type.colors[Math.floor(rand() * type.colors.length)],
       x: 0, z: 0, heading: 0, y: 0, ty: 0, pitch: 0, yKnown: !this.groundInit,
       trailer: null, vx: 0, vz: 0, w: 0, restT: 0, blendT: 0, blendFrom: null,
-      pursuit: false, chaseStuck: 0, lightsT: 0,
       dent: [0, 0, 0, 0], dmg: 0, wrecked: false, fire: 0, // crash damage: crush front / rear / left / right (m)
     };
     car.speed = Math.min(e.speed * car.v0f, car.maxV) * 0.85;
@@ -495,12 +513,13 @@ export class Traffic {
     }
     const j = this.cars.indexOf(car);
     if (j >= 0) this.cars.splice(j, 1);
+    const sl = this.mission && car.slot !== undefined ? this.mission.slots[car.slot] : null;
+    if (sl && sl.car === car) sl.car = null; // refilled next step
   }
 
   clear() {
     for (const c of this.cars.slice()) this.removeCar(c);
     this.occ.clear();
-    this.events.length = 0;
   }
 
   // ------------------------------------------------------------------ junction rules
@@ -826,7 +845,6 @@ export class Traffic {
     let best = null, bestGap = maxD;
     for (const o of e.cars) {
       if (o === car || !this.inLane(o, lane)) continue;
-      if (car.pursuit && o.pullT > 0) continue;
       const d = o.s - s;
       if (d <= 0) continue;
       const gap = d - o.back - car.front;
@@ -838,7 +856,6 @@ export class Traffic {
       const myRemain = car.curve && car.edge === e ? car.curve.sStart + car.curve.len - s : e.len - this.rIn(e) - s + this.rIn(e) + rOut;
       for (const o of n.cars) {
         if (o === car || !this.inLane(o, nl)) continue;
-        if (car.pursuit && o.pullT > 0) continue;
         const gap = myRemain + o.s - rOut - o.back - car.front;
         if (gap < bestGap) { bestGap = gap; best = o; }
       }
@@ -870,7 +887,6 @@ export class Traffic {
   }
 
   desiredSpeed(car, e) {
-    if (car.pursuit) return Math.min(50, Math.max(e.speed * 1.6, 27));
     return Math.min(e.speed * car.v0f, car.maxV);
   }
 
@@ -1019,7 +1035,7 @@ export class Traffic {
     return false;
   }
 
-  // crashed cars and chasing police lying across our path
+  // crashed cars lying across our path
   obstacleAcc(car, v, v0) {
     let acc = Infinity;
     const hx = Math.sin(car.heading), hz = Math.cos(car.heading);
@@ -1060,7 +1076,7 @@ export class Traffic {
       v0 = Math.min(v0, Math.sqrt(vb * vb + 2 * p.b * Math.max(0, d)));
     }
     // ease off before a lower limit ahead
-    if (n && !car.pursuit) {
+    if (n) {
       const vn = this.desiredSpeed(car, n);
       if (vn < v0) v0 = Math.min(v0, Math.sqrt(vn * vn + 2 * 1.0 * Math.max(0, e.len - car.s)));
     }
@@ -1074,28 +1090,23 @@ export class Traffic {
       if (l2) acc = Math.min(acc, this.idm(car, v, v0, l2.gap, l2.v));
     }
     let hold = null;
-    if (!car.pursuit && !car.curve) hold = this.holdPoint(car, e, n, ti, sStart, dt);
+    if (!car.curve) hold = this.holdPoint(car, e, n, ti, sStart, dt);
     else car.held = car.yielding = false;
     if (hold !== null) acc = Math.min(acc, this.idm(car, v, v0, Math.max(0.05, hold - car.s - car.front), 0));
     // reaction time when the way clears (green light, gap found)
     const stopped = hold !== null || (lead && lead.gap < 6 && lead.v < 0.5);
-    if (car.wasHeld && !stopped && v < 0.5) car.startDelay = p.react * (0.6 + Math.random() * 0.8);
+    if (car.wasHeld && !stopped && v < 0.5) car.startDelay = p.react * (0.6 + car.rand() * 0.8);
     car.wasHeld = stopped;
     if (car.startDelay > 0) { car.startDelay -= dt; acc = Math.min(acc, 0); }
     acc = Math.min(acc, this.obstacleAcc(car, v, v0), this.playerAcc(car, v, v0));
-    if (car.pullT > 0) {
-      car.pullT -= dt;
-      acc = Math.min(acc, v > 0.3 ? -Math.min(3.5, 0.55 * v + 0.4) : 0);
-    }
     if (car.stunT > 0) { car.stunT -= dt; acc = Math.min(acc, -6); }
     if (car.yielding || car.held) car.waitT += dt;
     car.acc = Math.max(-9, Math.min(car.aMax, acc));
-    car.brake = car.acc < -0.7 || (v < 0.3 && (stopped || car.pullT > 0)) ? 1 : 0;
+    car.brake = car.acc < -0.7 || (v < 0.3 && stopped) ? 1 : 0;
 
     // lanes, route fixes, signals
     if (!car.curve) this.laneLogic(car, e, n, ti, sStart, dt);
     if (car.lc) car.blink = car.lane > car.lc.fromLane ? -1 : 1;
-    else if (car.pullT > 0) car.blink = 1;
     else if (n && (ti.dir === 1 || ti.dir === -1 || ti.dir === 2) && (car.curve || sStart - car.s < 50)) car.blink = ti.dir === 1 ? 1 : -1;
     else car.blink = 0;
   }
@@ -1106,19 +1117,19 @@ export class Traffic {
     const [lo, hi] = this.laneRange(e, n, ti.dir);
     const wrong = car.lane < lo || car.lane > hi;
     // too late to get over: pick a different way out that works from this lane
-    if (wrong && n && distEnd < 35 && !car.rerouted && !car.pursuit) {
+    if (wrong && n && distEnd < 35 && !car.rerouted) {
       car.rerouted = true;
       const alt = (this.out[e.to] || []).filter((o) => o !== e.twin && o !== n).filter((o) => {
         const [a, b] = this.laneRange(e, o, this.turnInfo(e, o).dir);
         return car.lane >= a && car.lane <= b;
       });
-      if (alt.length) { car.next = alt[Math.floor(Math.random() * alt.length)]; car.plan = null; this.planCluster(car); }
+      if (alt.length) { car.next = alt[Math.floor(car.rand() * alt.length)]; car.plan = null; this.planCluster(car); }
       return;
     }
-    if (e.lanes < 2 || car.pullT > 0) return;
+    if (e.lanes < 2) return;
     car.lcTimer -= dt;
     if (car.lcTimer > 0) return;
-    car.lcTimer = 0.6 + Math.random() * 0.6;
+    car.lcTimer = 0.6 + car.rand() * 0.6;
     // a wreck blocking this lane ahead: move over to an open lane (forced, like a lane drop)
     if (this.offRoad.length && this.laneBlocked(car, e, car.lane)) {
       for (const L of [car.lane + 1, car.lane - 1]) {
@@ -1222,17 +1233,15 @@ export class Traffic {
       const target = this.laneOffset(e, car.lane);
       car.off += (target - car.off) * Math.min(1, dt * 2.5);
     }
-    // swerve / pull over offsets
+    // swerve offset
     if (car.swerveT > 0) car.swerveT -= dt;
     const swTarget = car.swerveT > 0 ? car.swerveDir * 1.3 : 0;
     car.swerve += (swTarget - car.swerve) * Math.min(1, dt * 3);
-    const pullTarget = car.pullT > 0 ? 1.7 : 0;
-    car.pullOff += (pullTarget - car.pullOff) * Math.min(1, dt * 1.2);
     // into the junction / onto the next edge
     if (car.next && !car.curve) {
       const sStart = e.len - this.rIn(e);
       if (car.s >= sStart) {
-        if (this.needsRes(e) && !this.hasRes(car, e.to, e) && !car.pursuit) { car.s = sStart - 0.01; car.speed = 0; }
+        if (this.needsRes(e) && !this.hasRes(car, e.to, e)) { car.s = sStart - 0.01; car.speed = 0; }
         else this.buildCurve(car);
       }
     }
@@ -1250,7 +1259,7 @@ export class Traffic {
       dx = 2 * (1 - t) * (c.x1 - c.x0) + 2 * t * (c.x2 - c.x1); dz = 2 * (1 - t) * (c.z1 - c.z0) + 2 * t * (c.z2 - c.z1);
       if (dx * dx + dz * dz < 1e-8) { dx = c.x2 - c.x0; dz = c.z2 - c.z0; }
     } else {
-      const p = this.pointOn(e, Math.min(car.s, e.len), car.off + car.swerve + car.pullOff, car.seg);
+      const p = this.pointOn(e, Math.min(car.s, e.len), car.off + car.swerve, car.seg);
       car.seg = p.seg; px = p.x; pz = p.z; dx = p.dx; dz = p.dz;
     }
     const h = Math.atan2(dx, dz);
@@ -1291,18 +1300,16 @@ export class Traffic {
     const k = Math.abs(along) > car.len * 0.3 ? (along > 0 ? 0 : 1) : left > 0 ? 2 : 3;
     const maxC = k < 2 ? Math.min(1.1, car.len * 0.22) : 0.38;
     // crush and wear go with the energy of the hit (dv squared): parking-lot bumps barely mark a car, while
-    // a single ~11 m/s (25 mph) change of speed wrecks it. Police cruisers (push bars, heavy-duty parts) take
-    // about twice that, so nudging you during a chase doesn't finish them.
-    const e = (dv - 1.2) ** 2, tough = car.police ? 1.8 : 1;
-    car.dent[k] = Math.min(maxC, car.dent[k] + (e * (k < 2 ? 0.012 : 0.007)) / (car.police ? 1.4 : 1));
+    // a single ~11 m/s (25 mph) change of speed wrecks it.
+    const e = (dv - 1.2) ** 2;
+    car.dent[k] = Math.min(maxC, car.dent[k] + e * (k < 2 ? 0.012 : 0.007));
     car.dmg += e;
-    if (!car.wrecked && (car.dmg > 90 * tough || car.dent[0] > 0.55 * tough || car.dent[1] > 0.6 * tough || (!car.police && car.dent[k] >= maxC * 0.98))) {
+    if (!car.wrecked && (car.dmg > 90 || car.dent[0] > 0.55 || car.dent[1] > 0.6 || car.dent[k] >= maxC * 0.98)) {
       car.wrecked = true;
       car.hazard = true;
       if (car.mode !== 'crash') this.enterCrash(car, vx, vz);
-      if (car.pursuit) this.endPursuit(car); // after enterCrash, so it isn't put back on the road
       // a caved-in front end sometimes catches fire
-      if (car.dent[0] > 0.75 && Math.random() < 0.25) car.fire = 1;
+      if (car.dent[0] > 0.75 && car.rand() < 0.25) car.fire = 1;
     }
   }
 
@@ -1315,7 +1322,7 @@ export class Traffic {
     car.mode = 'crash';
     car.vx = vx; car.vz = vz;
     car.restT = 0; car.hazard = true; car.lc = null; car.curve = null; car.speed = 0;
-    car.pullT = 0; car.swerve = 0; car.pullOff = 0; car.blink = 0;
+    car.swerve = 0; car.blink = 0;
   }
 
   crashStep(car, dt) {
@@ -1488,7 +1495,6 @@ export class Traffic {
       const J = this.impulse(car, [-rel[0], -rel[1]], -best.nx, -best.nz, best.cx, best.cz, mP, (rnP * rnP) / IP);
       out.dvx = (J / mP) * best.nx; out.dvz = (J / mP) * best.nz; out.J = J;
       out.impact = -vn;
-      if (-vn > 1) this.events.push({ type: 'hit', car, speed: -vn, time: this.time });
     }
     return out;
   }
@@ -1521,112 +1527,6 @@ export class Traffic {
     }
   }
 
-  // ------------------------------------------------------------------ police support
-  startPursuit(car) {
-    if (car.pursuit) return;
-    car.pursuit = true;
-    car.pers = PURSUIT;
-    car.aMax = PURSUIT.a * car.type.accel;
-    this.release(car);
-    car.held = car.yielding = false;
-    car.stopDone = true;
-  }
-  endPursuit(car) {
-    if (!car.pursuit) return;
-    car.pursuit = false;
-    car.pers = PERSONALITIES[1];
-    car.aMax = car.pers.a * car.type.accel;
-    car.lightsT = 3;
-    if (car.mode === 'chase') {
-      car.restT = 0;
-      this.recover(car);
-      if (car.mode !== 'drive') this.removeCar(car);
-    }
-  }
-  spawnPursuer(px, pz, heading) {
-    // traffic is at its cap: retire the farthest ordinary car to make room for the cruiser
-    if (this.cars.length >= this.maxCars) {
-      let far = null, fd = -1;
-      for (const c of this.cars) { if (c.police) continue; const d = Math.hypot(c.x - px, c.z - pz); if (d > fd) { fd = d; far = c; } }
-      if (far) this.removeCar(far);
-    }
-    // prefer roads behind you, out of sight
-    for (let k = 0; k < 4; k++) {
-      const c = this.spawnNear(px, pz, 170, 290, { police: true });
-      if (!c) continue;
-      const behind = (c.x - px) * Math.sin(heading) + (c.z - pz) * Math.cos(heading) < 0;
-      if (behind || k === 3) { this.startPursuit(c); return c; }
-      this.removeCar(c);
-    }
-    return null;
-  }
-
-  // shortest road distance from every junction to the player (backward Dijkstra)
-  updateNav() {
-    const P = this.player;
-    const loc = this.locate(P.x, P.z, P.heading, 60);
-    if (!loc) return;
-    const V = this.vx.length;
-    const dist = this.navDist && this.navDist.length === V ? this.navDist : new Float64Array(V);
-    dist.fill(Infinity);
-    const heap = [];
-    const push = (v, d) => {
-      if (d >= dist[v]) return;
-      dist[v] = d;
-      heap.push([d, v]);
-      let i = heap.length - 1;
-      while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; }
-    };
-    const pop = () => {
-      const top = heap[0], last = heap.pop();
-      if (heap.length) {
-        heap[0] = last;
-        let i = 0;
-        for (;;) {
-          const l = i * 2 + 1, r = l + 1;
-          let m = i;
-          if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
-          if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
-          if (m === i) break;
-          [heap[m], heap[i]] = [heap[i], heap[m]]; i = m;
-        }
-      }
-      return top;
-    };
-    push(loc.e.from, loc.s);
-    push(loc.e.to, loc.e.len - loc.s);
-    while (heap.length) {
-      const [d, v] = pop();
-      if (d > dist[v]) continue;
-      if (d > 6000) break;
-      for (const f of this.vIn[v]) push(f.from, d + f.len);
-    }
-    this.navDist = dist;
-  }
-
-  chaseStep(car, dt) {
-    const P = this.player;
-    const tx = P.x + P.vx * 0.5, tz = P.z + P.vz * 0.5;
-    const dx = tx - car.x, dz = tz - car.z, dist = Math.hypot(dx, dz);
-    const psp = Math.hypot(P.vx, P.vz);
-    const want = Math.atan2(dx, dz);
-    const dh = wrap(want - car.heading);
-    const maxTurn = Math.min(2.4, 0.4 + Math.abs(car.speed) * 0.18);
-    if (car.speed >= 0) car.heading += Math.max(-maxTurn * dt, Math.min(maxTurn * dt, dh));
-    else car.heading -= Math.max(-maxTurn * dt, Math.min(maxTurn * dt, dh)) * 0.6;
-    let target = dist > 30 ? Math.min(55, psp + 12) : dist > 12 ? psp + 4 : Math.max(0, psp - 0.5);
-    if (Math.abs(dh) > 1.1) target = Math.min(target, 9);
-    if (car.chaseStuck > 2.5) target = -5; // back up and try again
-    car.speed += Math.max(-9 * dt, Math.min(5 * dt, target - car.speed));
-    car.x += Math.sin(car.heading) * car.speed * dt;
-    car.z += Math.cos(car.heading) * car.speed * dt;
-    this.wallBounce(car, 0.2);
-    if (Math.abs(car.speed) < 1 && dist > 14) car.chaseStuck += dt; else car.chaseStuck = Math.max(0, car.chaseStuck - dt * 2);
-    if (car.chaseStuck > 3.5) car.chaseStuck = 0;
-    car.brake = target < car.speed - 1 ? 1 : 0;
-    if (dist > 130) { this.recover(car); if (car.mode === 'drive') car.startDelay = 0; }
-  }
-
   // ------------------------------------------------------------------ main loop
   // Switch between flat (classic) and mesh-following (photoreal) heights.
   setGround(ground, groundInit, { cheap = false, blobs = true } = {}) {
@@ -1637,79 +1537,152 @@ export class Traffic {
     for (const c of this.cars) { c.yKnown = !groundInit; if (!groundInit) c.y = c.ty = 0; }
   }
 
-  update(dt, player, time = performance.now() / 1000) {
+  // Per frame: advance the simulation in fixed steps, then draw the cars interpolated between the last two.
+  update(dt, player) {
     if (!this.enabled) {
       for (const k in this.meshes) this.meshes[k].body.count = this.meshes[k].details.count = 0;
       this.blobMesh.count = 0;
+      this.time += dt; // the lights keep cycling
       return;
     }
-    dt = Math.min(dt, 0.1);
-    this.time = time;
+    this.acc = Math.min(this.acc + dt, 0.25);
+    while (this.acc >= STEP) {
+      this.acc -= STEP;
+      for (const c of this.cars) {
+        c.ix = c.x; c.iz = c.z; c.iy = c.y; c.ih = c.heading;
+        const t = c.trailer;
+        if (t) { t.ix = t.x; t.iz = t.z; t.ih = t.heading; }
+      }
+      this.step(STEP, player);
+    }
+    this.render(this.acc / STEP);
+  }
+
+  // ------------------------------------------------------------------ mission corridor
+  // Every run of a mission meets the same traffic: the cars live in a corridor along the mission's route
+  // instead of around you. The corridor has a fixed number of slots, each with its own seeded random
+  // stream; a car that leaves the corridor (or is towed, or quietly turns off) is replaced from its slot's
+  // stream near the corridor's edge, so whatever happens to one car doesn't change the others' futures.
+  // Same clock, same seeds, same fixed steps: identical traffic, except where you interact with it.
+  beginMission(seed, pts, start) {
+    this.clear();
+    this.mission = null;
+    this.time = 0; this.acc = 0; this.nextId = 1;
+    this._rr = 0; this.playerStillT = 0;
+    if (!pts || pts.length < 4) return;
+    const R = MISSION.R, PAD = R + 400;
+    // route segments in a grid, for "distance to the route" (exact up to PAD, else Infinity)
+    const grid = new Grid(250), n = pts.length / 2;
+    for (let i = 0; i < n - 1; i++) {
+      const ax = pts[i * 2], az = pts[i * 2 + 1], bx = pts[i * 2 + 2], bz = pts[i * 2 + 3];
+      grid.insertBox(Math.min(ax, bx) - PAD, Math.min(az, bz) - PAD, Math.max(ax, bx) + PAD, Math.max(az, bz) + PAD, i);
+    }
+    const dist = (x, z) => {
+      let best = Infinity;
+      grid.forBox(x, z, x, z, (i) => {
+        const ax = pts[i * 2], az = pts[i * 2 + 1], dx = pts[i * 2 + 2] - ax, dz = pts[i * 2 + 3] - az;
+        const L2 = dx * dx + dz * dz || 1e-9, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2));
+        const d = Math.hypot(x - ax - dx * t, z - az - dz * t);
+        if (d < best) best = d;
+      });
+      return best;
+    };
+    let routeLen = 0;
+    for (let i = 0; i < n - 1; i++) routeLen += Math.hypot(pts[i * 2 + 2] - pts[i * 2], pts[i * 2 + 3] - pts[i * 2 + 1]);
+    // edges with any part within R of the route (sampled every ~20 m)
+    const set = new Set(), list = [];
+    for (const e of this.edges) {
+      if (e.len / 2 < 400 && !(dist(e.mx, e.mz) <= R + e.len / 2)) continue; // nowhere near
+      let inside = false;
+      for (let k = 0, m = Math.max(1, Math.ceil(e.len / 20)); k <= m && !inside; k++) {
+        const p = this.pointOn(e, (e.len * k) / m, 0);
+        inside = dist(p.x, p.z) <= R;
+      }
+      if (!inside) continue;
+      set.add(e);
+      if (e.len >= 20 && !e.inner) list.push(e);
+    }
+    const cum = new Float64Array(list.length);
+    let total = 0;
+    list.forEach((e, i) => { total += e.vol * e.lanes * Math.min(e.len, 300); cum[i] = total; });
+    const area = (routeLen * 2 * R + Math.PI * R * R) / 1e6;
+    const N = Math.max(30, Math.min(MISSION.cap, Math.round(MISSION.density * area)));
+    const slots = [];
+    for (let i = 0; i < N; i++) slots.push({ rand: seededRandom(subSeed(seed, i)), car: null, gen: 0 });
+    this.mission = { seed, dist, set, list, cum, total, slots, sx: start[0], sz: start[1], N, routeLen };
+    for (let i = 0; i < N; i++) this.spawnSlot(i, false);
+  }
+
+  endMission() {
+    if (!this.mission) return;
+    this.mission = null;
+    for (const c of this.cars) c.slot = undefined;
+    this._seeded = true; // carry on with the cars there are; the ring spawner tops up around you
+  }
+
+  // fill slot i: anywhere in the corridor at the start, near its edge afterwards
+  spawnSlot(i, rim) {
+    const M = this.mission, sl = M.slots[i], rand = sl.rand, R = MISSION.R;
+    if (!M.list.length) return null;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const r = rand() * M.total;
+      let lo = 0, hi = M.cum.length - 1;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (M.cum[mid] < r) lo = mid + 1; else hi = mid; }
+      const e = M.list[lo];
+      const s = 6 + rand() * Math.max(1, e.len - 6 - this.rIn(e) - 18);
+      if (s > e.len - this.rIn(e) - 12) continue;
+      const p = this.pointOn(e, s, 0), d = M.dist(p.x, p.z);
+      if (d > R) continue;
+      if (rim && d < R * MISSION.rim && attempt < 30) continue;
+      if (Math.hypot(p.x - M.sx, p.z - M.sz) < MISSION.startClear) continue;
+      const car = this.placeCar(e, s, rand);
+      if (!car) continue;
+      car.slot = i; car.gen = sl.gen++; sl.car = car;
+      car.ix = car.x; car.iz = car.z; car.iy = car.y; car.ih = car.heading;
+      // keep the list in slot order: cars are processed in list order (who reserves a junction first in
+      // the same step), and that mustn't depend on which slots happened to be refilled before
+      this.cars.pop();
+      let at = this.cars.length;
+      while (at > 0 && !(this.cars[at - 1].slot < i)) at--;
+      this.cars.splice(at, 0, car);
+      return car;
+    }
+    return null; // tried again next step
+  }
+
+  // One fixed simulation step.
+  step(dt, player) {
+    this.time += dt;
     const P = this.player;
     P.x = player.x; P.z = player.z; P.y = player.y; P.heading = player.heading;
     P.vx = player.vx || 0; P.vz = player.vz || 0;
     this.playerStillT = Math.hypot(P.vx, P.vz) < 0.5 ? (this.playerStillT || 0) + dt : 0;
     const px = player.x, pz = player.z;
-    // despawn far cars, top up near the player
-    for (const c of this.cars.slice()) {
-      const d = Math.hypot(c.x - px, c.z - pz);
-      if (d > (c.pursuit ? 1500 : 820)) this.removeCar(c);
+    const M = this.mission;
+    if (M) {
+      // mission: cars that drove out of the corridor go; empty slots refill near its edge
+      for (const c of this.cars.slice()) if (c.mode === 'drive' && !M.set.has(c.edge)) this.removeCar(c);
+      for (let i = 0; i < M.slots.length; i++) if (!M.slots[i].car) this.spawnSlot(i, true);
+    } else {
+      // despawn far cars, top up near the player
+      for (const c of this.cars.slice()) {
+        const d = Math.hypot(c.x - px, c.z - pz);
+        if (d > 820) this.removeCar(c);
+      }
+      let spawnBudget = this.cars.length < this.maxCars * 0.5 ? 20 : 3;
+      while (this.cars.length < this.maxCars && spawnBudget-- > 0) {
+        const first = this.cars.length < this.maxCars * 0.5 && !this._seeded;
+        this.spawnNear(px, pz, first ? 40 : 260, first ? 620 : 660);
+      }
+      if (this.cars.length >= this.maxCars * 0.5) this._seeded = true;
     }
-    let spawnBudget = this.cars.length < this.maxCars * 0.5 ? 20 : 3;
-    while (this.cars.length < this.maxCars && spawnBudget-- > 0) {
-      const first = this.cars.length < this.maxCars * 0.5 && !this._seeded;
-      this.spawnNear(px, pz, first ? 40 : 260, first ? 620 : 660);
-    }
-    if (this.cars.length >= this.maxCars * 0.5) this._seeded = true;
 
-    // police: routing toward you, chasing up close, everyone else pulling over
-    const pursuers = this.cars.filter((c) => c.pursuit);
-    if (pursuers.length) {
-      this.navTimer -= dt;
-      if (this.navTimer <= 0 && pursuers.some((c) => c.mode === 'drive')) {
-        this.navTimer = 1;
-        this.updateNav();
-        // you're back the other way: swing around right here instead of driving to the next junction
-        for (const c of pursuers) {
-          const e = c.edge;
-          if (c.mode !== 'drive' || c.curve || !e.twin || !this.navDist) continue;
-          const ahead = e.len - c.s + this.navDist[e.to], back = c.s + this.navDist[e.from];
-          if (back < ahead - 60) {
-            this.release(c);
-            const list = e.cars, i = list.indexOf(c);
-            if (i >= 0) list.splice(i, 1);
-            const t = e.twin;
-            c.blendFrom = { x: c.x, z: c.z, heading: c.heading }; c.blendT = 1.4;
-            c.edge = t; c.s = Math.max(1, t.len - c.s); c.lane = t.lanes - 1; c.off = this.laneOffset(t, c.lane);
-            c.speed *= 0.3; c.seg = 0; c.lc = null; c.plan = null;
-            c.next = this.chooseNext(t, c);
-            t.cars.push(c);
-          }
-        }
-      }
-      for (const c of pursuers) {
-        if (c.mode === 'drive' && Math.hypot(c.x - px, c.z - pz) < 55 && Math.abs(c.y - (player.y ?? c.y)) < 4) {
-          this.release(c);
-          const list = c.edge.cars, i = list.indexOf(c);
-          if (i >= 0) list.splice(i, 1);
-          c.mode = 'chase'; c.curve = null; c.lc = null; c.off = 0; c.chaseStuck = 0;
-        }
-        const hx = Math.sin(c.heading), hz = Math.cos(c.heading);
-        for (const o of this.cars) {
-          if (o === c || o.police || o.mode !== 'drive' || o.curve) continue;
-          const dx = o.x - c.x, dz = o.z - c.z;
-          if (Math.abs(dx) > 100 || Math.abs(dz) > 100) continue;
-          const along = dx * hx + dz * hz, side = -dx * hz + dz * hx;
-          if (along > 0 && along < 100 && Math.abs(side) < 9) o.pullT = 2.2;
-        }
-      }
-    }
     this.offRoad = this.cars.filter((c) => c.mode !== 'drive');
 
     for (const car of this.cars) if (car.mode === 'drive') this.think(car, dt);
     for (const car of this.cars.slice()) {
       if (car.mode !== 'drive') continue;
-      car.resStallT = car.res.length && car.speed < 0.3 && !car.pursuit ? (car.resStallT || 0) + dt : 0;
+      car.resStallT = car.res.length && car.speed < 0.3 ? (car.resStallT || 0) + dt : 0;
       if (car.resStallT > 5) { car.resStallT = 0; this.releaseUnentered(car); }
       car.stillT = car.speed < 0.1 && !car.held ? (car.stillT || 0) + dt : 0;
       if (car.stillT > 30) {
@@ -1723,10 +1696,8 @@ export class Traffic {
       let alive = true;
       if (car.mode === 'drive') alive = this.advance(car, dt);
       else if (car.mode === 'crash') alive = this.crashStep(car, dt);
-      else if (car.mode === 'chase') this.chaseStep(car, dt);
       if (!alive) { this.removeCar(car); continue; }
       if (car.trailer) this.updateTrailer(car);
-      if (car.lightsT > 0) car.lightsT -= dt;
     }
     this.crashChain();
 
@@ -1763,24 +1734,25 @@ export class Traffic {
           const h = this.ground(car.x, car.z, car.y);
           if (h !== null) car.ty = h;
         }
-        for (const car of this.cars) if (car.mode === 'chase' && car.yKnown) { const h = this.ground(car.x, car.z, car.y); if (h !== null) car.ty = h; }
         for (const car of this.cars) { car.pitch = 0; if (car.trailer) { car.trailer.y = car.y; car.trailer.pitch = 0; } }
       }
       const kY = this.groundCheap ? 1 : Math.min(1, dt * 6);
       for (const car of this.cars) car.y += (car.ty - car.y) * kY;
     }
-    this.render();
   }
 
-  render() {
+  // Draw the cars `alpha` of the way from their previous step to the current one.
+  render(alpha = 1) {
+    let k = alpha;
+    const lerp = (a, b) => (a === undefined ? b : a + (b - a) * k);
+    const lerpH = (a, b) => (a === undefined ? b : a + wrap(b - a) * k);
     const m = this._m, q = this._q, e = this._e, pos = this._p, sc = this._s;
     for (const k in this.meshes) this.meshes[k].n = 0;
     const blink = Math.floor(this.time * 3) % 2 === 0 ? 1 : 0;
-    const flash = Math.floor(this.time * 7) % 2 === 0 ? 1 : 2;
     const blobs = this.blobMesh.visible;
     let nb = 0;
     const NODENT = [0, 0, 0, 0];
-    const put = (M, x, y, z, heading, pitch, color, brake, left, right, bar, dent = NODENT) => {
+    const put = (M, x, y, z, heading, pitch, color, brake, left, right, dent = NODENT) => {
       const i = M.n++;
       e.set(pitch, heading, 0, 'YXZ');
       q.setFromEuler(e);
@@ -1789,25 +1761,27 @@ export class Traffic {
       M.body.setMatrixAt(i, m);
       M.details.setMatrixAt(i, m);
       M.body.setColorAt(i, this._c.setHex(color));
-      M.lamps.setXYZW(i, brake, left, right, bar);
+      M.lamps.setXYZW(i, brake, left, right, 0);
       M.dent.setXYZW(i, dent[0], dent[1], dent[2], dent[3]);
     };
     for (const car of this.cars) {
       if (!car.yKnown) continue;
       const left = blink && (car.blink === -1 || car.hazard) ? 1 : 0;
       const right = blink && (car.blink === 1 || car.hazard) ? 1 : 0;
-      const bar = car.police && (car.pursuit || car.lightsT > 0) ? flash : 0;
-      put(this.meshes[car.type.id], car.x, car.y, car.z, car.heading, car.pitch, car.color, car.brake, left, right, bar, car.dent);
+      // a jump in one step (just placed on the ground, swung around for a U-turn, put back on the road): no blend
+      k = car.ix === undefined || Math.abs(car.ix - car.x) + Math.abs(car.iz - car.z) > 6 || Math.abs(car.iy - car.y) > 1.5 ? 1 : alpha;
+      const cx = lerp(car.ix, car.x), cy = lerp(car.iy, car.y), cz = lerp(car.iz, car.z), ch = lerpH(car.ih, car.heading);
+      put(this.meshes[car.type.id], cx, cy, cz, ch, car.pitch, car.color, car.brake, left, right, car.dent);
       if (car.trailer) {
         const t = car.trailer;
-        put(this.meshes.trailer, t.x, t.y || car.y, t.z, t.heading, t.pitch, 0xeeeeee, car.brake, left, right, 0);
+        put(this.meshes.trailer, lerp(t.ix, t.x), t.y || cy, lerp(t.iz, t.z), lerpH(t.ih, t.heading), t.pitch, 0xeeeeee, car.brake, left, right);
       }
       if (blobs) {
         const s2 = this._s2 || (this._s2 = new THREE.Vector3());
         s2.set(car.width + 0.6, 1, car.len + 0.6);
-        e.set(0, car.heading, 0);
+        e.set(0, ch, 0);
         q.setFromEuler(e);
-        pos.set(car.x, car.y, car.z);
+        pos.set(cx, cy, cz);
         m.compose(pos, q, s2);
         this.blobMesh.setMatrixAt(nb++, m);
       }

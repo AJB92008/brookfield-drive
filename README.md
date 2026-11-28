@@ -36,6 +36,7 @@ To update the hosted copy after changing the code, run `npm run build:artifact`.
 | S / ↓ | Brake, then reverse |
 | A D / ← → | Steer |
 | Space | Handbrake (drift) |
+| L | Steering assist on or off (on by default). Let go of the steering while on the gas and the car clicks onto the road's direction: it straightens out, follows the road's bends, and finishes a turn you let go of a little early. Off the gas it only nudges. A quick tap of A/D with the gas held moves you over about a lane and straightens up. Any steering input overrides it completely, it does nothing when you're angled more than about 20° off the road (turning off, a U-turn), and it doesn't pull you toward the middle of the lane |
 | C | Cycle camera: chase, far, hood, top-down, showcase |
 | V | Showcase camera that circles the car |
 | I | Show the car's spec sheet |
@@ -48,9 +49,9 @@ To update the hosted copy after changing the code, run `npm run build:artifact`.
 | P | Switch between the photoreal 3D city and the classic look |
 | H | Show or hide the controls panel |
 
-A gamepad also works: left stick steers, RT is gas, LT is brake, A/B is handbrake, Y changes camera, X resets, LB calls a tow, Back opens the map, Start opens missions (d-pad picks, A starts or retries, B closes).
+A gamepad also works: left stick steers, RT is gas, LT is brake, A/B is handbrake, Y changes camera, X resets, LB calls a tow, RB turns the steering assist on or off, Back opens the map, Start opens missions (d-pad picks, A starts or retries, B closes).
 
-## Traffic and police
+## Traffic
 
 About 150 AI vehicles drive around you on the real road graph. Busy roads like Bluemound, Moorland and I-94 get the most traffic; side streets get a little.
 
@@ -62,8 +63,7 @@ About 150 AI vehicles drive around you on the real road graph. Busy roads like B
 - **Lanes:** cars change lanes to pass slower traffic (MOBIL), keep right, and move over early for turns and lane drops. They take smooth curves through every junction and signal before turning or changing lanes.
 - **Vehicles:** sedans, SUVs, pickups, minivans, box trucks, city buses and semis with trailers that track behind the cab. Each has its own size, mass and acceleration. Brake lights, turn signals and hazard lights work.
 - **You:** cars predict your path and brake or swerve if you cut them off, and they yield to you at junctions. Hit one and momentum is exchanged by mass: it slides and spins, puts its hazards on, then pulls back onto the road. Crashed cars can knock into other cars.
-- **AI damage:** every hit crushes the end or side that took it, scaled by the car's change in speed. A crushed front steams, then smokes. Hit hard enough, a car is wrecked: it stays where it stopped with its hazards on, and a caved-in front sometimes catches fire. Traffic changes lanes to get around it. A wreck is towed once you've moved on. A wrecked police car drops out of the chase.
-- **Police:** a few patrol cars drive around. Go 15+ mph over the limit near one, crash into someone near one, or hit one, and they come after you with lights flashing. They route through the streets toward you, chase you down up close, and other drivers pull over to let them by. Stay more than about 320 m from every cruiser for 10 s to escape. Stop with one right next to you and you're busted.
+- **AI damage:** every hit crushes the end or side that took it, scaled by the car's change in speed. A crushed front steams, then smokes. Hit hard enough, a car is wrecked: it stays where it stopped with its hazards on, and a caved-in front sometimes catches fire. Traffic changes lanes to get around it. A wreck is towed once you've moved on.
 - **Testing:** the traffic was tuned with a headless simulation that measures collisions between AI cars, stuck cars, red lights and stop signs run, and speeds against the limit.
 
 ## Crashes
@@ -140,17 +140,16 @@ npm run audit-ground           # checks that the ground never pokes through a ro
 | `src/world.js` | Builds road ribbons with mitered joins and junction discs, painted lane lines (double yellow, dashed lanes, edge lines, gaps at intersections), extruded buildings with hip roofs on houses, parks and water, rail lines, and about 463k instanced trees. Static geometry is merged into 500 m tiles, and those (plus the street furniture) are grouped into 1 km cells. Cells past the view distance are hidden, the world's matrices are computed once instead of every frame, and a cell's CPU-side vertex arrays are dropped once they're on the GPU. That keeps the 20 × 18 km map at the same frame rate as Brookfield alone. |
 | `src/sc430.js` | The player car, a 2002 Lexus SC 430 built from the official spec sheet: 4.515 m long, 1,742 kg. The 3UZ-FE V8 torque curve makes 300 hp and 325 lb-ft. Torque goes through a torque converter and 5-speed automatic (3.266 final drive, 245/40R18) with a rear-wheel-drive traction limit. Drag uses Cd 0.30, and there's a 155 mph limiter. Stock car: 0–60 in 5.96 s, quarter mile in 14.6 s, 60–0 braking in 124 ft, 35.4 ft turning circle. The **Sport tune** (the default; **K** toggles) has 450 hp, no limiter, stickier tires, quicker shifts and a 27.9 ft turning circle: 0–60 in 4.37 s, quarter mile in 12.5 s at 120 mph, 196 mph top speed, 1.18 g cornering. |
 | `src/car.js` | The contact-shadow texture. |
-| `src/vehicles.js` | AI vehicle types: models, sizes, masses and acceleration, plus the lamp shader for brake lights, turn signals and police lights, and the per-car crush shader for crash damage. |
+| `src/vehicles.js` | AI vehicle types: models, sizes, masses and acceleration, plus the lamp shader for brake lights and turn signals, and the per-car crush shader for crash damage. |
 | `src/speedlimits.js` | Posted speed limit for every road. |
 | `src/missions.js` | Mission mode: the 12 missions, routing on the road graph (Dijkstra by travel time at the speed limits), the finish beacon and on-screen marker, splits, the ghost car, medals, results and saved bests. |
-| `src/police.js` | When police chase you, escapes, busts, and the pursuit banner. |
 | `src/crash.js` | Crash effects (sparks, debris, smoke, steam, flames), breakaway poles, and smoke and fire from damaged AI cars. |
 | `src/damage.js` | The player car's damage model: zones, mechanical failures and their effects on driving, dents, scrapes, loose and fallen panels, glass, fire, puddles, and the damage panel. |
 | `src/shops.js` | Repair shops: rings at every real repair and tire shop, repairs, the tow, and their map icons. |
 | `src/terrain.js` | Loads the elevation grid. `T()` is the drawn ground and `Troad()` the original lidar surface that roads follow. `carveRoadBeds()` lowers the ground under roads just enough. |
 | `src/aerial.js` | Streams the stylized ground tiles as meshes on the exact terrain grid, with the crisp-edge shader. |
 | `scripts/stylize-ground.mjs` | Classifies the aerial photos into the ground palette (run by `build-map`; `--skip-ground` skips it). |
-| `src/traffic.js` | AI traffic on the real road graph: IDM driving, junction reservations and right-of-way rules, MOBIL lane changes, junction curves, crashes, crash damage and wrecks, and police routing and chasing. |
+| `src/traffic.js` | AI traffic on the real road graph (fixed-step, and the same every run of a mission: a seeded corridor of cars along its route): IDM driving, junction reservations and right-of-way rules, MOBIL lane changes, junction curves, crashes, crash damage and wrecks. |
 | `src/hud.js` | Speedometer, street-name sign with route shields, the town you're in, a rotating minimap, and the full city map, both with the mission route. |
 | `src/spatial.js` | Grid indexes for road and building lookups. `RoadIndex.surfaceHeight()` gives the drivable height: road surface, bridge deck or ground. |
 
@@ -177,9 +176,13 @@ Press **N** for the mission list: 12 timed runs between Brookfield landmarks, in
 
 How a run works:
 
-- **Same start every time.** You're taken to the mission's start, at or beside the place it's named for, and the car is repaired and traffic resets. A card shows the mission, the medal times and your best during the 3-second countdown.
+- **Same start every time.** You're taken to the mission's start, at or beside the place it's named for, and the car is repaired. A card shows the mission, the medal times and your best during the 3-second countdown.
+- **Same traffic every time.** Each mission has its own traffic, and it's the same on every run: the same cars, in the same places, doing the same things at the same moment, with the lights in the same phase. Cars only do something different where you change things (cut one off, hit one, block a lane), and only that car and the cars around it.
+  - During a mission the traffic lives in a corridor about 250 m either side of the mission's route instead of around your car, so how fast you drive doesn't change it. It has a fixed number of cars (about free-roam density, up to 300 on the longest routes). Each has its own seeded random choices, and a car that leaves the corridor is replaced near its edge.
+  - Traffic runs in fixed 1/60 s steps on its own clock, so the frame rate doesn't change it either, and the countdown ends on that clock.
+  - Leave the route by more than the corridor and there's no traffic out there. After the run, traffic goes back to normal around you.
 - **Fixed medal times** for gold, silver and bronze on every mission, so every run is comparable and your best is a real record. They were set by driving each mission with a scripted test driver (traffic off): gold is its time plus 20%, silver plus 60%, bronze about double.
-- **No other rules.** Speed, run lights, cut through lots. The police leave you alone for the run.
+- **No other rules.** Speed, run lights, cut through lots.
 - **Navigation:**
   - The route shows on the minimap and the city map. It's the fastest legal route at the speed limits, it respects one-way streets and divided roads, and it updates as you drive, so it follows you if you leave it.
   - A tall light beam, colored by tier, stands over the finish. You can see it from across town.
@@ -192,6 +195,6 @@ How a run works:
 
 ## Ideas for next steps
 
-- **Other mission types.** Checkpoint races, deliveries, or police escapes.
+- **Other mission types.** Checkpoint races or deliveries.
 
 Map data © OpenStreetMap contributors, licensed under the ODbL. The in-game attribution must stay visible.
